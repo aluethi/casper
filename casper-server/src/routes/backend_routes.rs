@@ -64,24 +64,34 @@ pub struct BackendResponse {
 }
 
 // Row: never select api_key_enc
-type BackendRow = (
-    Uuid, String, String, Option<String>, Option<String>,
-    Option<String>, i32, i32, serde_json::Value, bool, OffsetDateTime,
-);
+#[derive(sqlx::FromRow)]
+struct BackendRow {
+    id: Uuid,
+    name: String,
+    provider: String,
+    provider_label: Option<String>,
+    base_url: Option<String>,
+    region: Option<String>,
+    priority: i32,
+    max_queue_depth: i32,
+    extra_config: serde_json::Value,
+    is_active: bool,
+    created_at: OffsetDateTime,
+}
 
 fn row_to_response(r: BackendRow) -> BackendResponse {
     BackendResponse {
-        id: r.0,
-        name: r.1,
-        provider: r.2,
-        provider_label: r.3,
-        base_url: r.4,
-        region: r.5,
-        priority: r.6,
-        max_queue_depth: r.7,
-        extra_config: r.8,
-        is_active: r.9,
-        created_at: to_rfc3339(r.10),
+        id: r.id,
+        name: r.name,
+        provider: r.provider,
+        provider_label: r.provider_label,
+        base_url: r.base_url,
+        region: r.region,
+        priority: r.priority,
+        max_queue_depth: r.max_queue_depth,
+        extra_config: r.extra_config,
+        is_active: r.is_active,
+        created_at: to_rfc3339(r.created_at),
     }
 }
 
@@ -103,6 +113,13 @@ pub struct BackendModelResponse {
     pub backend_id: Uuid,
     pub model_id: Uuid,
     pub priority: i32,
+}
+
+#[derive(sqlx::FromRow)]
+struct BackendModelRow {
+    backend_id: Uuid,
+    model_id: Uuid,
+    priority: i32,
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -264,7 +281,7 @@ async fn assign_backend(
 ) -> Result<Json<BackendModelResponse>, CasperError> {
     guard.require("platform:admin")?;
 
-    let row: (Uuid, Uuid, i32) = sqlx::query_as(
+    let row: BackendModelRow = sqlx::query_as(
         "INSERT INTO platform_backend_models (backend_id, model_id, priority)
          VALUES ($1, $2, $3)
          ON CONFLICT (backend_id, model_id) DO UPDATE SET priority = EXCLUDED.priority
@@ -278,9 +295,9 @@ async fn assign_backend(
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(BackendModelResponse {
-        backend_id: row.0,
-        model_id: row.1,
-        priority: row.2,
+        backend_id: row.backend_id,
+        model_id: row.model_id,
+        priority: row.priority,
     }))
 }
 
@@ -292,7 +309,7 @@ async fn list_model_backends(
 ) -> Result<Json<Vec<BackendModelResponse>>, CasperError> {
     guard.require("platform:admin")?;
 
-    let rows: Vec<(Uuid, Uuid, i32)> = sqlx::query_as(
+    let rows: Vec<BackendModelRow> = sqlx::query_as(
         "SELECT backend_id, model_id, priority
          FROM platform_backend_models
          WHERE model_id = $1
@@ -306,9 +323,9 @@ async fn list_model_backends(
     let data = rows
         .into_iter()
         .map(|r| BackendModelResponse {
-            backend_id: r.0,
-            model_id: r.1,
-            priority: r.2,
+            backend_id: r.backend_id,
+            model_id: r.model_id,
+            priority: r.priority,
         })
         .collect();
 

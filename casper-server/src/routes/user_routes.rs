@@ -48,20 +48,32 @@ pub struct UserResponse {
     pub created_by: String,
 }
 
-type UserRow = (Uuid, Uuid, String, String, Vec<String>, Option<String>, Option<String>, Option<OffsetDateTime>, OffsetDateTime, String);
+#[derive(sqlx::FromRow)]
+struct UserRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    subject: String,
+    role: String,
+    scopes: Vec<String>,
+    email: Option<String>,
+    display_name: Option<String>,
+    last_login_at: Option<OffsetDateTime>,
+    created_at: OffsetDateTime,
+    created_by: String,
+}
 
 fn row_to_response(r: UserRow) -> UserResponse {
     UserResponse {
-        id: r.0,
-        tenant_id: r.1,
-        subject: r.2,
-        role: r.3,
-        scopes: r.4,
-        email: r.5,
-        display_name: r.6,
-        last_login_at: opt_to_rfc3339(r.7),
-        created_at: to_rfc3339(r.8),
-        created_by: r.9,
+        id: r.id,
+        tenant_id: r.tenant_id,
+        subject: r.subject,
+        role: r.role,
+        scopes: r.scopes,
+        email: r.email,
+        display_name: r.display_name,
+        last_login_at: opt_to_rfc3339(r.last_login_at),
+        created_at: to_rfc3339(r.created_at),
+        created_by: r.created_by,
     }
 }
 

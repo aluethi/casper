@@ -72,28 +72,40 @@ pub struct DeploymentResponse {
     pub created_at: String,
 }
 
-type DeploymentRow = (
-    Uuid, Uuid, Uuid, String, String,
-    Vec<Uuid>, i32, i32, bool, i32,
-    serde_json::Value, Option<i32>, bool, OffsetDateTime,
-);
+#[derive(sqlx::FromRow)]
+struct DeploymentRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    model_id: Uuid,
+    name: String,
+    slug: String,
+    backend_sequence: Vec<Uuid>,
+    retry_attempts: i32,
+    retry_backoff_ms: i32,
+    fallback_enabled: bool,
+    timeout_ms: i32,
+    default_params: serde_json::Value,
+    rate_limit_rpm: Option<i32>,
+    is_active: bool,
+    created_at: OffsetDateTime,
+}
 
 fn row_to_response(r: DeploymentRow) -> DeploymentResponse {
     DeploymentResponse {
-        id: r.0,
-        tenant_id: r.1,
-        model_id: r.2,
-        name: r.3,
-        slug: r.4,
-        backend_sequence: r.5,
-        retry_attempts: r.6,
-        retry_backoff_ms: r.7,
-        fallback_enabled: r.8,
-        timeout_ms: r.9,
-        default_params: r.10,
-        rate_limit_rpm: r.11,
-        is_active: r.12,
-        created_at: to_rfc3339(r.13),
+        id: r.id,
+        tenant_id: r.tenant_id,
+        model_id: r.model_id,
+        name: r.name,
+        slug: r.slug,
+        backend_sequence: r.backend_sequence,
+        retry_attempts: r.retry_attempts,
+        retry_backoff_ms: r.retry_backoff_ms,
+        fallback_enabled: r.fallback_enabled,
+        timeout_ms: r.timeout_ms,
+        default_params: r.default_params,
+        rate_limit_rpm: r.rate_limit_rpm,
+        is_active: r.is_active,
+        created_at: to_rfc3339(r.created_at),
     }
 }
 
@@ -116,6 +128,21 @@ pub struct ResolvedBackend {
     pub provider: String,
     pub base_url: Option<String>,
     pub priority: i32,
+}
+
+#[derive(sqlx::FromRow)]
+struct DeploymentTestRow {
+    model_id: Uuid,
+    backend_sequence: Vec<Uuid>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ResolvedBackendRow {
+    id: Uuid,
+    name: String,
+    provider: String,
+    base_url: Option<String>,
+    priority: i32,
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -355,7 +382,7 @@ async fn test_deployment(
     let tenant_id = guard.0.tenant_id.0;
 
     // Fetch the deployment
-    let dep: Option<(Uuid, Vec<Uuid>)> = sqlx::query_as(
+    let dep: Option<DeploymentTestRow> = sqlx::query_as(
         "SELECT model_id, backend_sequence FROM model_deployments
          WHERE id = $1 AND tenant_id = $2 AND is_active = true"
     )
@@ -365,13 +392,15 @@ async fn test_deployment(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    let (model_id, backend_sequence) = dep.ok_or_else(|| {
+    let dep = dep.ok_or_else(|| {
         CasperError::NotFound(format!("active deployment {id}"))
     })?;
+    let model_id = dep.model_id;
+    let backend_sequence = dep.backend_sequence;
 
     // Resolve backends: if backend_sequence is specified, use those in order;
     // otherwise fall back to platform_backend_models for the model.
-    let backends: Vec<(Uuid, String, String, Option<String>, i32)> = if backend_sequence.is_empty() {
+    let backends: Vec<ResolvedBackendRow> = if backend_sequence.is_empty() {
         sqlx::query_as(
             "SELECT pb.id, pb.name, pb.provider, pb.base_url, pbm.priority
              FROM platform_backend_models pbm
@@ -402,11 +431,11 @@ async fn test_deployment(
     let resolved = backends
         .into_iter()
         .map(|r| ResolvedBackend {
-            backend_id: r.0,
-            name: r.1,
-            provider: r.2,
-            base_url: r.3,
-            priority: r.4,
+            backend_id: r.id,
+            name: r.name,
+            provider: r.provider,
+            base_url: r.base_url,
+            priority: r.priority,
         })
         .collect();
 

@@ -1,4 +1,34 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+
+/// The role of a chat message participant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+impl MessageRole {
+    /// Return the role as a lowercase string slice.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::Tool => "tool",
+        }
+    }
+}
+
+impl fmt::Display for MessageRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Unified LLM request format used internally by the proxy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +53,7 @@ pub struct LlmRequest {
 /// A single chat message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub role: String,
+    pub role: MessageRole,
     /// Content can be a string or array of content blocks.
     pub content: serde_json::Value,
 }
@@ -32,7 +62,7 @@ pub struct Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmResponse {
     pub content: String,
-    pub role: String,
+    pub role: MessageRole,
     pub model: String,
     pub input_tokens: i32,
     pub output_tokens: i32,

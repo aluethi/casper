@@ -25,14 +25,20 @@ pub struct DomainResponse {
     pub created_at: String,
 }
 
-type DomainRow = (String, Uuid, bool, OffsetDateTime);
+#[derive(sqlx::FromRow)]
+struct DomainRow {
+    domain: String,
+    tenant_id: Uuid,
+    verified: bool,
+    created_at: OffsetDateTime,
+}
 
 fn row_to_response(r: DomainRow) -> DomainResponse {
     DomainResponse {
-        domain: r.0,
-        tenant_id: r.1,
-        verified: r.2,
-        created_at: to_rfc3339(r.3),
+        domain: r.domain,
+        tenant_id: r.tenant_id,
+        verified: r.verified,
+        created_at: to_rfc3339(r.created_at),
     }
 }
 

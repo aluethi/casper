@@ -31,16 +31,24 @@ pub struct AgentMemoryResponse {
     pub updated_at: String,
 }
 
-type AgentMemoryRow = (Uuid, String, String, i32, i32, OffsetDateTime);
+#[derive(sqlx::FromRow)]
+struct AgentMemoryRow {
+    tenant_id: Uuid,
+    agent_name: String,
+    content: String,
+    token_count: i32,
+    version: i32,
+    updated_at: OffsetDateTime,
+}
 
 fn agent_memory_to_response(r: AgentMemoryRow) -> AgentMemoryResponse {
     AgentMemoryResponse {
-        tenant_id: r.0,
-        agent_name: r.1,
-        content: r.2,
-        token_count: r.3,
-        version: r.4,
-        updated_at: to_rfc3339(r.5),
+        tenant_id: r.tenant_id,
+        agent_name: r.agent_name,
+        content: r.content,
+        token_count: r.token_count,
+        version: r.version,
+        updated_at: to_rfc3339(r.updated_at),
     }
 }
 
@@ -61,18 +69,28 @@ pub struct AgentMemoryHistoryResponse {
     pub created_at: String,
 }
 
-type AgentMemoryHistoryRow = (Uuid, Uuid, String, i32, String, i32, String, OffsetDateTime);
+#[derive(sqlx::FromRow)]
+struct AgentMemoryHistoryRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    agent_name: String,
+    version: i32,
+    content: String,
+    token_count: i32,
+    updated_by: String,
+    created_at: OffsetDateTime,
+}
 
 fn agent_history_to_response(r: AgentMemoryHistoryRow) -> AgentMemoryHistoryResponse {
     AgentMemoryHistoryResponse {
-        id: r.0,
-        tenant_id: r.1,
-        agent_name: r.2,
-        version: r.3,
-        content: r.4,
-        token_count: r.5,
-        updated_by: r.6,
-        created_at: to_rfc3339(r.7),
+        id: r.id,
+        tenant_id: r.tenant_id,
+        agent_name: r.agent_name,
+        version: r.version,
+        content: r.content,
+        token_count: r.token_count,
+        updated_by: r.updated_by,
+        created_at: to_rfc3339(r.created_at),
     }
 }
 
@@ -243,16 +261,24 @@ pub struct TenantMemoryResponse {
     pub updated_by: String,
 }
 
-type TenantMemoryRow = (Uuid, String, i32, i32, OffsetDateTime, String);
+#[derive(sqlx::FromRow)]
+struct TenantMemoryRow {
+    tenant_id: Uuid,
+    content: String,
+    token_count: i32,
+    version: i32,
+    updated_at: OffsetDateTime,
+    updated_by: String,
+}
 
 fn tenant_memory_to_response(r: TenantMemoryRow) -> TenantMemoryResponse {
     TenantMemoryResponse {
-        tenant_id: r.0,
-        content: r.1,
-        token_count: r.2,
-        version: r.3,
-        updated_at: to_rfc3339(r.4),
-        updated_by: r.5,
+        tenant_id: r.tenant_id,
+        content: r.content,
+        token_count: r.token_count,
+        version: r.version,
+        updated_at: to_rfc3339(r.updated_at),
+        updated_by: r.updated_by,
     }
 }
 
@@ -267,17 +293,26 @@ pub struct TenantMemoryHistoryResponse {
     pub created_at: String,
 }
 
-type TenantMemoryHistoryRow = (Uuid, Uuid, i32, String, i32, String, OffsetDateTime);
+#[derive(sqlx::FromRow)]
+struct TenantMemoryHistoryRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    version: i32,
+    content: String,
+    token_count: i32,
+    updated_by: String,
+    created_at: OffsetDateTime,
+}
 
 fn tenant_history_to_response(r: TenantMemoryHistoryRow) -> TenantMemoryHistoryResponse {
     TenantMemoryHistoryResponse {
-        id: r.0,
-        tenant_id: r.1,
-        version: r.2,
-        content: r.3,
-        token_count: r.4,
-        updated_by: r.5,
-        created_at: to_rfc3339(r.6),
+        id: r.id,
+        tenant_id: r.tenant_id,
+        version: r.version,
+        content: r.content,
+        token_count: r.token_count,
+        updated_by: r.updated_by,
+        created_at: to_rfc3339(r.created_at),
     }
 }
 

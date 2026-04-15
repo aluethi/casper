@@ -53,18 +53,28 @@ pub struct ApiKeyCreatedResponse {
     pub created_by: String,
 }
 
-type ApiKeyRow = (Uuid, Uuid, String, Vec<String>, String, bool, OffsetDateTime, String);
+#[derive(sqlx::FromRow)]
+struct ApiKeyRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    name: String,
+    scopes: Vec<String>,
+    key_prefix: String,
+    is_active: bool,
+    created_at: OffsetDateTime,
+    created_by: String,
+}
 
 fn row_to_response(r: ApiKeyRow) -> ApiKeyResponse {
     ApiKeyResponse {
-        id: r.0,
-        tenant_id: r.1,
-        name: r.2,
-        scopes: r.3,
-        key_prefix: r.4,
-        is_active: r.5,
-        created_at: to_rfc3339(r.6),
-        created_by: r.7,
+        id: r.id,
+        tenant_id: r.tenant_id,
+        name: r.name,
+        scopes: r.scopes,
+        key_prefix: r.key_prefix,
+        is_active: r.is_active,
+        created_at: to_rfc3339(r.created_at),
+        created_by: r.created_by,
     }
 }
 
@@ -103,15 +113,15 @@ async fn create_api_key(
     })?;
 
     Ok(Json(ApiKeyCreatedResponse {
-        id: row.0,
-        tenant_id: row.1,
-        name: row.2,
-        scopes: row.3,
-        key_prefix: row.4,
+        id: row.id,
+        tenant_id: row.tenant_id,
+        name: row.name,
+        scopes: row.scopes,
+        key_prefix: row.key_prefix,
         key,
-        is_active: row.5,
-        created_at: to_rfc3339(row.6),
-        created_by: row.7,
+        is_active: row.is_active,
+        created_at: to_rfc3339(row.created_at),
+        created_by: row.created_by,
     }))
 }
 

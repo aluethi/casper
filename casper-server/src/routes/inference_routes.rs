@@ -118,10 +118,12 @@ async fn chat_completions(
         .messages
         .iter()
         .map(|m| {
-            let role = m["role"]
+            let role_str = m["role"]
                 .as_str()
-                .unwrap_or("user")
-                .to_string();
+                .unwrap_or("user");
+            let role: casper_proxy::MessageRole = serde_json::from_value(
+                serde_json::Value::String(role_str.to_string()),
+            ).unwrap_or(casper_proxy::MessageRole::User);
             let content = m.get("content").cloned().unwrap_or(serde_json::Value::Null);
             Message { role, content }
         })
@@ -186,7 +188,7 @@ async fn chat_completions(
     let response_id = format!("chatcmpl-{}", Uuid::now_v7().simple());
 
     let choice_message = ChoiceMessage {
-        role: llm_response.role.clone(),
+        role: llm_response.role.to_string(),
         content: if llm_response.content.is_empty() {
             None
         } else {
@@ -229,7 +231,11 @@ async fn list_models(
         &Scope::parse("inference:call").unwrap(),
     );
 
-    type DeploymentSlugRow = (String, String); // (slug, provider)
+    #[derive(sqlx::FromRow)]
+    struct DeploymentSlugRow {
+        slug: String,
+        provider: String,
+    }
 
     let rows: Vec<DeploymentSlugRow> = sqlx::query_as(
         "SELECT d.slug, m.provider
@@ -245,22 +251,22 @@ async fn list_models(
 
     let data: Vec<ModelEntry> = rows
         .into_iter()
-        .filter(|(slug, _provider)| {
+        .filter(|r| {
             if has_broad_scope {
                 return true;
             }
             // Check if caller has specific scope for this slug
-            let scope_str = format!("inference:{slug}:call");
+            let scope_str = format!("inference:{}:call", r.slug);
             if let Ok(scope) = Scope::parse(&scope_str) {
                 has_scope(&guard.0.scopes, &scope)
             } else {
                 false
             }
         })
-        .map(|(slug, provider)| ModelEntry {
-            id: slug,
+        .map(|r| ModelEntry {
+            id: r.slug,
             object: "model",
-            owned_by: provider,
+            owned_by: r.provider,
         })
         .collect();
 

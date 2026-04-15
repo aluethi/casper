@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use casper_base::CasperError;
 use casper_observe::RuntimeMetrics;
-use casper_proxy::{LlmRequest, LlmResponse};
+use casper_proxy::{LlmRequest, LlmResponse, MessageRole};
 use dashmap::DashMap;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
@@ -176,9 +176,13 @@ impl AgentBackendRegistry {
                     cache_write_tokens: None,
                 });
 
+                let role: MessageRole = serde_json::from_value(
+                    serde_json::Value::String(msg.role),
+                ).unwrap_or(MessageRole::Assistant);
+
                 Ok(LlmResponse {
                     content: msg.content.unwrap_or_default(),
-                    role: msg.role,
+                    role,
                     model: request.model.clone(),
                     input_tokens: usage.input_tokens,
                     output_tokens: usage.output_tokens,

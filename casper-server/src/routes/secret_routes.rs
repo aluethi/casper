@@ -25,13 +25,18 @@ pub struct SecretKeyResponse {
     pub updated_at: String,
 }
 
-type SecretKeyRow = (String, OffsetDateTime, OffsetDateTime);
+#[derive(sqlx::FromRow)]
+struct SecretKeyRow {
+    key: String,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+}
 
 fn row_to_response(r: SecretKeyRow) -> SecretKeyResponse {
     SecretKeyResponse {
-        key: r.0,
-        created_at: to_rfc3339(r.1),
-        updated_at: to_rfc3339(r.2),
+        key: r.key,
+        created_at: to_rfc3339(r.created_at),
+        updated_at: to_rfc3339(r.updated_at),
     }
 }
 

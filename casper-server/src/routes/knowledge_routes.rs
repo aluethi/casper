@@ -28,20 +28,32 @@ pub struct DocumentResponse {
     pub created_by: String,
 }
 
-type DocumentRow = (Uuid, Uuid, String, String, String, String, i32, i32, OffsetDateTime, String);
+#[derive(sqlx::FromRow)]
+struct DocumentRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    name: String,
+    source: String,
+    content_type: String,
+    file_path: String,
+    token_count: i32,
+    chunk_count: i32,
+    created_at: OffsetDateTime,
+    created_by: String,
+}
 
 fn row_to_response(r: DocumentRow) -> DocumentResponse {
     DocumentResponse {
-        id: r.0,
-        tenant_id: r.1,
-        name: r.2,
-        source: r.3,
-        content_type: r.4,
-        file_path: r.5,
-        token_count: r.6,
-        chunk_count: r.7,
-        created_at: to_rfc3339(r.8),
-        created_by: r.9,
+        id: r.id,
+        tenant_id: r.tenant_id,
+        name: r.name,
+        source: r.source,
+        content_type: r.content_type,
+        file_path: r.file_path,
+        token_count: r.token_count,
+        chunk_count: r.chunk_count,
+        created_at: to_rfc3339(r.created_at),
+        created_by: r.created_by,
     }
 }
 
@@ -55,16 +67,24 @@ pub struct ChunkResponse {
     pub metadata: serde_json::Value,
 }
 
-type ChunkRow = (Uuid, Uuid, i32, String, i32, serde_json::Value);
+#[derive(sqlx::FromRow)]
+struct ChunkRow {
+    id: Uuid,
+    document_id: Uuid,
+    chunk_index: i32,
+    content: String,
+    token_count: i32,
+    metadata: serde_json::Value,
+}
 
 fn chunk_row_to_response(r: ChunkRow) -> ChunkResponse {
     ChunkResponse {
-        id: r.0,
-        document_id: r.1,
-        chunk_index: r.2,
-        content: r.3,
-        token_count: r.4,
-        metadata: r.5,
+        id: r.id,
+        document_id: r.document_id,
+        chunk_index: r.chunk_index,
+        content: r.content,
+        token_count: r.token_count,
+        metadata: r.metadata,
     }
 }
 
@@ -89,16 +109,26 @@ pub struct SearchResult {
     pub token_count: i32,
 }
 
-type SearchRow = (Uuid, Uuid, String, i32, String, i32);
+#[derive(sqlx::FromRow)]
+struct SearchRow {
+    #[sqlx(rename = "id")]
+    chunk_id: Uuid,
+    document_id: Uuid,
+    #[sqlx(rename = "name")]
+    document_name: String,
+    chunk_index: i32,
+    content: String,
+    token_count: i32,
+}
 
 fn search_row_to_response(r: SearchRow) -> SearchResult {
     SearchResult {
-        chunk_id: r.0,
-        document_id: r.1,
-        document_name: r.2,
-        chunk_index: r.3,
-        content: r.4,
-        token_count: r.5,
+        chunk_id: r.chunk_id,
+        document_id: r.document_id,
+        document_name: r.document_name,
+        chunk_index: r.chunk_index,
+        content: r.content,
+        token_count: r.token_count,
     }
 }
 

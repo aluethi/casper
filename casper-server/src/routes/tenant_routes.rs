@@ -13,17 +13,26 @@ use crate::auth::ScopeGuard;
 use crate::helpers::to_rfc3339;
 use crate::pagination::{PaginationParams, PaginatedResponse, Pagination};
 
-type TenantRow = (Uuid, String, String, String, serde_json::Value, OffsetDateTime, OffsetDateTime);
+#[derive(sqlx::FromRow)]
+struct TenantRow {
+    id: Uuid,
+    slug: String,
+    display_name: String,
+    status: String,
+    settings: serde_json::Value,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+}
 
 fn row_to_response(r: TenantRow) -> TenantResponse {
     TenantResponse {
-        id: r.0,
-        slug: r.1,
-        display_name: r.2,
-        status: r.3,
-        settings: r.4,
-        created_at: to_rfc3339(r.5),
-        updated_at: to_rfc3339(r.6),
+        id: r.id,
+        slug: r.slug,
+        display_name: r.display_name,
+        status: r.status,
+        settings: r.settings,
+        created_at: to_rfc3339(r.created_at),
+        updated_at: to_rfc3339(r.updated_at),
     }
 }
 

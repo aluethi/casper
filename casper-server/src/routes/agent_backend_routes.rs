@@ -40,6 +40,16 @@ pub struct AgentKeyResponse {
     pub created_at: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct AgentKeyRow {
+    id: Uuid,
+    name: String,
+    key_prefix: String,
+    backend_id: Uuid,
+    is_active: bool,
+    created_at: OffsetDateTime,
+}
+
 // ── Handlers ──────────────────────────────────────────────────────
 
 /// POST /api/v1/backends/:id/keys — Create an agent backend key.
@@ -72,10 +82,10 @@ async fn create_agent_key(
     let id = Uuid::now_v7();
     let created_by = guard.0.subject.to_string();
 
-    let row: (Uuid, String, String, Uuid, OffsetDateTime) = sqlx::query_as(
+    let row: AgentKeyRow = sqlx::query_as(
         "INSERT INTO agent_backend_keys (id, name, key_hash, key_prefix, backend_id, created_by)
          VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, name, key_prefix, backend_id, created_at",
+         RETURNING id, name, key_prefix, backend_id, is_active, created_at",
     )
     .bind(id)
     .bind(&body.name)
@@ -88,12 +98,12 @@ async fn create_agent_key(
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(CreateAgentKeyResponse {
-        id: row.0,
-        name: row.1,
-        key_prefix: row.2,
+        id: row.id,
+        name: row.name,
+        key_prefix: row.key_prefix,
         key: plaintext_key, // returned once, never stored
-        backend_id: row.3,
-        created_at: to_rfc3339(row.4),
+        backend_id: row.backend_id,
+        created_at: to_rfc3339(row.created_at),
     }))
 }
 
@@ -105,7 +115,7 @@ async fn list_agent_keys(
 ) -> Result<Json<Vec<AgentKeyResponse>>, CasperError> {
     guard.require("platform:admin")?;
 
-    let rows: Vec<(Uuid, String, String, Uuid, bool, OffsetDateTime)> = sqlx::query_as(
+    let rows: Vec<AgentKeyRow> = sqlx::query_as(
         "SELECT id, name, key_prefix, backend_id, is_active, created_at
          FROM agent_backend_keys
          WHERE backend_id = $1
@@ -119,12 +129,12 @@ async fn list_agent_keys(
     let data = rows
         .into_iter()
         .map(|r| AgentKeyResponse {
-            id: r.0,
-            name: r.1,
-            key_prefix: r.2,
-            backend_id: r.3,
-            is_active: r.4,
-            created_at: to_rfc3339(r.5),
+            id: r.id,
+            name: r.name,
+            key_prefix: r.key_prefix,
+            backend_id: r.backend_id,
+            is_active: r.is_active,
+            created_at: to_rfc3339(r.created_at),
         })
         .collect();
 

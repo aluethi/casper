@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use casper_base::CasperError;
 use casper_observe::{AuditWriter, UsageRecorder};
-use casper_proxy::{LlmRequest, Message};
+use casper_proxy::{LlmRequest, Message, MessageRole};
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -143,15 +143,20 @@ impl AgentEngine {
         // Convert history to messages
         let mut messages: Vec<Message> = history
             .into_iter()
-            .map(|h| Message {
-                role: h.role,
-                content: h.content,
+            .filter_map(|h| {
+                let role: MessageRole = serde_json::from_value(
+                    serde_json::Value::String(h.role.clone()),
+                ).ok()?;
+                Some(Message {
+                    role,
+                    content: h.content,
+                })
             })
             .collect();
 
         // Append the new user message
         messages.push(Message {
-            role: "user".to_string(),
+            role: MessageRole::User,
             content: serde_json::Value::String(user_message.to_string()),
         });
 
@@ -244,7 +249,7 @@ impl AgentEngine {
                 }
 
                 let assistant_msg = Message {
-                    role: "assistant".to_string(),
+                    role: MessageRole::Assistant,
                     content: json!(content_blocks),
                 };
                 messages.push(assistant_msg.clone());
@@ -335,7 +340,7 @@ impl AgentEngine {
 
                     // Add tool result as a message
                     let tool_msg = Message {
-                        role: "tool".to_string(),
+                        role: MessageRole::Tool,
                         content: result_content.clone(),
                     };
                     messages.push(tool_msg);
@@ -458,7 +463,7 @@ mod tests {
         // but we can verify the mock caller works.
         let request = LlmRequest {
             messages: vec![Message {
-                role: "user".to_string(),
+                role: MessageRole::User,
                 content: json!("Hi"),
             }],
             model: "test".to_string(),

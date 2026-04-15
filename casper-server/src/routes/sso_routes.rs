@@ -55,19 +55,30 @@ pub struct SsoResponse {
     pub created_at: String,
 }
 
-type SsoRow = (Uuid, Uuid, String, String, String, String, String, bool, OffsetDateTime);
+#[derive(sqlx::FromRow)]
+struct SsoRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    name: String,
+    provider_type: String,
+    issuer_url: String,
+    client_id: String,
+    scopes: String,
+    is_active: bool,
+    created_at: OffsetDateTime,
+}
 
 fn row_to_response(r: SsoRow) -> SsoResponse {
     SsoResponse {
-        id: r.0,
-        tenant_id: r.1,
-        name: r.2,
-        provider_type: r.3,
-        issuer_url: r.4,
-        client_id: r.5,
-        scopes: r.6,
-        is_active: r.7,
-        created_at: to_rfc3339(r.8),
+        id: r.id,
+        tenant_id: r.tenant_id,
+        name: r.name,
+        provider_type: r.provider_type,
+        issuer_url: r.issuer_url,
+        client_id: r.client_id,
+        scopes: r.scopes,
+        is_active: r.is_active,
+        created_at: to_rfc3339(r.created_at),
     }
 }
 

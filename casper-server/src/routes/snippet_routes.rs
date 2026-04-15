@@ -46,19 +46,30 @@ pub struct SnippetResponse {
     pub created_by: String,
 }
 
-type SnippetRow = (Uuid, Uuid, String, String, String, i32, OffsetDateTime, OffsetDateTime, String);
+#[derive(sqlx::FromRow)]
+struct SnippetRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    name: String,
+    display_name: String,
+    content: String,
+    token_estimate: i32,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+    created_by: String,
+}
 
 fn row_to_response(r: SnippetRow) -> SnippetResponse {
     SnippetResponse {
-        id: r.0,
-        tenant_id: r.1,
-        name: r.2,
-        display_name: r.3,
-        content: r.4,
-        token_estimate: r.5,
-        created_at: to_rfc3339(r.6),
-        updated_at: to_rfc3339(r.7),
-        created_by: r.8,
+        id: r.id,
+        tenant_id: r.tenant_id,
+        name: r.name,
+        display_name: r.display_name,
+        content: r.content,
+        token_estimate: r.token_estimate,
+        created_at: to_rfc3339(r.created_at),
+        updated_at: to_rfc3339(r.updated_at),
+        created_by: r.created_by,
     }
 }
 
