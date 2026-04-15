@@ -189,3 +189,13 @@
 **Dependencies added:** axum multipart feature added to workspace
 **Notes:** Knowledge upload stores file to data/knowledge/{tenant_id}/{id}.{ext}, chunks by paragraph (~2000 chars). Search is ILIKE text search (vector search deferred until pgvector installed). Memory versioning: old version archived to history table, current updated in-place with version++. Token estimation: content.len()/4. Embeddings deferred (Task 4B) — search works via ILIKE for now.
 ---
+
+## Tasks 5A, 5E, 5F — Agent CRUD, conversations, history loading
+**Status:** PASSED
+**Completed:** 2026-04-15T10:00:00Z
+**Commit:** pending
+**Summary:** Agent CRUD with deployment validation and version bumps (5A). Conversation list/get/delete/outcome routes (5E). Conversation history loader with tool_use/tool_result pair preservation (5F). 6 unit tests for history loading.
+**Files changed:** casper-server/src/routes/agent_routes.rs, conversation_routes.rs (new), crates/casper-agent/src/prompt/ (new module: mod.rs, types.rs, history.rs), lib.rs updates
+**Dependencies added:** none
+**Notes:** Agent create validates model_deployment slug references an active deployment. Agent update increments version. Conversation history groups messages into turns that keep tool_use/tool_result pairs intact — never splits a pair during budget truncation. History loaded newest-first, then reversed for chronological order. Prompt types define all 9 block types as a tagged enum. Test data uses tenant 99999999-9999-9999-9999-999999999999 to avoid collision with casper-db integration tests.
+---

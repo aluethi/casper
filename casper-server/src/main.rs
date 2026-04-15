@@ -245,6 +245,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::knowledge_routes::knowledge_router())
         .merge(routes::memory_routes::memory_router())
         .merge(routes::snippet_routes::snippet_router())
+        .merge(routes::agent_routes::agent_router())
+        .merge(routes::conversation_routes::conversation_router())
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             auth::auth_middleware,

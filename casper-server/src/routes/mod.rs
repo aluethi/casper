@@ -1,7 +1,9 @@
+pub mod agent_routes;
 pub mod apikey_routes;
 pub mod auth_routes;
 pub mod backend_routes;
 pub mod catalog_routes;
+pub mod conversation_routes;
 pub mod deployment_routes;
 pub mod domain_routes;
 pub mod inference_routes;
