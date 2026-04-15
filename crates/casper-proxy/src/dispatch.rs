@@ -125,8 +125,8 @@ pub async fn dispatch_with_retry<'a>(
     }))
 }
 
-/// Determine if an error should not be retried.
-fn is_non_retryable(err: &CasperError) -> bool {
+/// Determine if an error should not be retried (4xx client errors).
+pub fn is_non_retryable(err: &CasperError) -> bool {
     matches!(
         err,
         CasperError::BadRequest(_)
