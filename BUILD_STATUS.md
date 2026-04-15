@@ -199,3 +199,13 @@
 **Dependencies added:** none
 **Notes:** Agent create validates model_deployment slug references an active deployment. Agent update increments version. Conversation history groups messages into turns that keep tool_use/tool_result pairs intact — never splits a pair during budget truncation. History loaded newest-first, then reversed for chronological order. Prompt types define all 9 block types as a tagged enum. Test data uses tenant 99999999-9999-9999-9999-999999999999 to avoid collision with casper-db integration tests.
 ---
+
+## Tasks 5G-5N — Built-in tools, actors, ReAct loop
+**Status:** PASSED
+**Completed:** 2026-04-15T10:30:00Z
+**Commit:** pending
+**Summary:** Tool trait + ToolDispatcher with 6 built-in tools (update_memory, knowledge_search, web_search, web_fetch, delegate sentinel, ask_user sentinel). ActorRegistry with DashMap + spawned tokio tasks. Idle reaper with CancellationToken. AgentEngine with full ReAct loop (mock + real LLM via casper-proxy). 32 unit tests passing.
+**Files changed:** crates/casper-agent/src/tools/ (7 files), actor.rs, reaper.rs, engine.rs, lib.rs, Cargo.toml
+**Dependencies added:** reqwest, tokio-util (casper-agent)
+**Notes:** Tool trait is async with ToolContext for DB access. ToolDispatcher generates Anthropic-format tool definitions. UpdateMemoryTool enforces max_document_tokens, archives old version to history. DelegateTool and AskUserTool return sentinels (__delegate__, __ask_user__) for detection in ReAct loop. ActorRegistry spawns tokio tasks with bounded mpsc mailbox. ReAct loop: assemble prompt → call LLM → if tool_use: dispatch → loop; if end_turn: return. LlmCaller trait abstracts mock vs real. RealLlmCaller uses casper-catalog routing + casper-proxy dispatch. Records audit + usage after each LLM call.
+---
