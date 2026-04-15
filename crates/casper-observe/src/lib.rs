@@ -1,4 +1,7 @@
-/// Audit writer, usage tracking, and Prometheus metrics.
-pub struct AuditWriter;
-pub struct UsageRecorder;
-pub struct RuntimeMetrics;
+mod audit;
+mod metrics;
+mod usage;
+
+pub use audit::{AuditEntry, AuditWriter};
+pub use metrics::RuntimeMetrics;
+pub use usage::UsageRecorder;

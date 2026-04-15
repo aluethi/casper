@@ -99,3 +99,13 @@
 **Dependencies added:** none
 **Notes:** Vault.encrypt_value/decrypt_value store nonce:ciphertext in a single string (for SSO client_secret_enc, platform_backends.api_key_enc). Vault.set/get use separate DB columns (tenant_secrets table). resolve_mcp_secret parses "secret:key_name" format. Per-tenant key isolation verified in tests.
 ---
+
+## Task 1G — Audit writer
+**Status:** PASSED
+**Completed:** 2026-04-15T08:25:00Z
+**Commit:** pending
+**Summary:** Implemented AuditWriter with bounded mpsc channel, batched inserts, non-blocking log(). Also implemented UsageRecorder and RuntimeMetrics (Prometheus) as part of casper-observe.
+**Files changed:** crates/casper-observe/src/audit.rs (new), crates/casper-observe/src/usage.rs (new), crates/casper-observe/src/metrics.rs (new), crates/casper-observe/src/lib.rs
+**Dependencies added:** none
+**Notes:** AuditWriter uses try_send to never block callers. Background task receives entries, drains up to 100 per batch, inserts individually (could be optimized to multi-row INSERT later). UsageRecorder tracks all four token types (input, output, cache_read, cache_write). RuntimeMetrics has counters for LLM calls, tool calls, actor lifecycle, and HTTP requests.
+---
