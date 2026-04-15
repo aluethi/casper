@@ -359,12 +359,12 @@ name = "casper-auth"
 version = "0.1.0"
 dependencies = [
  "casper-base",
- "chrono",
  "jsonwebtoken",
  "ring",
  "serde",
  "serde_json",
  "sqlx",
+ "time",
  "tokio",
  "tokio-util",
  "tracing",
@@ -376,7 +376,6 @@ name = "casper-base"
 version = "0.1.0"
 dependencies = [
  "axum",
- "chrono",
  "ed25519-dalek",
  "jsonwebtoken",
  "rand 0.9.4",
@@ -494,7 +493,6 @@ dependencies = [
  "casper-observe",
  "casper-proxy",
  "casper-vault",
- "chrono",
  "dashmap",
  "futures",
  "hex",

@@ -176,7 +176,9 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
         loop {
             interval.tick().await;
             let ping = serde_json::to_string(&WsMessage::Ping {
-                timestamp: chrono::Utc::now().to_rfc3339(),
+                timestamp: time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default(),
             })
             .unwrap();
             if ping_sender.send(ping).await.is_err() {
