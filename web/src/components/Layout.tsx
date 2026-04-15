@@ -121,23 +121,7 @@ export default function Layout() {
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
-        <header className="h-14 bg-white shadow-sm flex items-center justify-between px-8">
-          <div />
-          <div className="flex items-center gap-4">
-            {user && (
-              <>
-                <span className="text-sm text-slate-600">{user.subject}</span>
-                <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">{user.role}</span>
-                <span className="text-xs text-slate-400">{user.tenant_id}</span>
-                <button
-                  onClick={() => logout()}
-                  className="text-sm text-slate-500 hover:text-slate-900 transition-colors"
-                >
-                  Logout
-                </button>
-              </>
-            )}
-          </div>
+        <header className="h-14 bg-white shadow-sm flex items-center px-8">
         </header>
 
         {/* Page content */}
