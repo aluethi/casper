@@ -4,18 +4,19 @@ use clap::Parser;
 use serde::Deserialize;
 use std::path::PathBuf;
 
-/// Casper Agent Backend sidecar — connects a local inference server to Casper.
+/// Casper Agent Backend sidecar — connects local inference servers to Casper.
 ///
-/// The sidecar can serve multiple backends from a single machine. Each key
-/// corresponds to one backend (and one model). All keys share the same local
-/// inference server.
+/// Each backend entry maps a Casper agent key to a local inference URL.
+/// The sidecar opens one WebSocket per key and dispatches inference requests
+/// to the configured local endpoint.
 ///
-/// Minimal config:
 /// ```yaml
 /// casper_url: ws://casper.ventoo.ai/agent/connect
-/// keys:
-///   - csa-abc...    # Llama 3 backend
-///   - csa-def...    # Gemma 2 backend
+/// backends:
+///   - key: csa-abc123...
+///     inference_url: http://localhost:8000    # vLLM with Llama 3
+///   - key: csa-def456...
+///     inference_url: http://localhost:8001    # Ollama with Gemma 2
 /// ```
 #[derive(Parser)]
 #[command(name = "casper-agent-backend", version, about)]
@@ -27,31 +28,44 @@ struct Cli {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SidecarConfig {
-    /// WebSocket URL: ws://casper.ventoo.ai/agent/connect
+    /// Casper WebSocket URL.
     pub casper_url: String,
 
-    /// Agent backend keys. Each key maps to one backend (one model).
-    /// All share the same local inference server.
+    /// Backend entries. Each maps a key to a local inference URL.
     #[serde(default)]
-    pub keys: Vec<String>,
+    pub backends: Vec<BackendEntry>,
 
-    /// Single key (convenience for single-backend setups).
-    /// If both `key` and `keys` are set, they are merged.
+    /// Shorthand for a single backend (for simple setups).
     #[serde(default, alias = "agent_key")]
     pub key: Option<String>,
-
-    /// Optional: override the inference server URL from the server config.
+    /// Inference URL for the single-key shorthand.
     #[serde(default)]
-    pub inference_base_url: Option<String>,
+    pub inference_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BackendEntry {
+    /// Agent backend key: csa-...
+    pub key: String,
+    /// Local inference server URL (e.g. http://localhost:8000).
+    #[serde(default = "default_inference_url")]
+    pub inference_url: String,
+}
+
+fn default_inference_url() -> String {
+    "http://localhost:11434".to_string()
 }
 
 impl SidecarConfig {
-    /// Get all keys (merges `key` and `keys` fields, deduplicates).
-    pub fn all_keys(&self) -> Vec<String> {
-        let mut all = self.keys.clone();
+    /// Resolve all backend entries (merges single-key shorthand with backends list).
+    pub fn all_backends(&self) -> Vec<BackendEntry> {
+        let mut all = self.backends.clone();
         if let Some(k) = &self.key {
-            if !all.contains(k) {
-                all.insert(0, k.clone());
+            if !all.iter().any(|b| b.key == *k) {
+                all.insert(0, BackendEntry {
+                    key: k.clone(),
+                    inference_url: self.inference_url.clone().unwrap_or_else(default_inference_url),
+                });
             }
         }
         all
@@ -68,20 +82,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
-
-    let config_str = std::fs::read_to_string(&cli.config).map_err(|e| {
-        format!("failed to read config file {:?}: {e}", cli.config)
-    })?;
+    let config_str = std::fs::read_to_string(&cli.config)
+        .map_err(|e| format!("failed to read config {:?}: {e}", cli.config))?;
     let config: SidecarConfig = serde_yaml::from_str(&config_str)?;
 
-    let keys = config.all_keys();
-    if keys.is_empty() {
-        return Err("no agent keys configured (set `key` or `keys` in config)".into());
+    let backends = config.all_backends();
+    if backends.is_empty() {
+        return Err("no backends configured (set `key` + `inference_url` or `backends` list)".into());
     }
 
     tracing::info!(
         casper_url = %config.casper_url,
-        backends = keys.len(),
+        backends = backends.len(),
         "starting casper-agent-backend sidecar"
     );
 
@@ -89,35 +101,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .timeout(std::time::Duration::from_secs(120))
         .build()?;
 
-    // Spawn one connection per key — each reconnects independently
+    // Spawn one connection per backend — each reconnects independently
     let mut handles = Vec::new();
-    for agent_key in keys {
-        let cfg = config.clone();
+    for entry in backends {
+        let casper_url = config.casper_url.clone();
         let client = http_client.clone();
-        let prefix = if agent_key.len() >= 12 { &agent_key[..12] } else { &agent_key };
-        tracing::info!(key_prefix = %prefix, "spawning connection");
+        let prefix = if entry.key.len() >= 12 { &entry.key[..12] } else { &entry.key };
+        tracing::info!(key_prefix = %prefix, inference_url = %entry.inference_url, "spawning backend connection");
 
         handles.push(tokio::spawn(async move {
             let mut backoff_secs = 1u64;
-            let max_backoff = 30u64;
             loop {
-                match ws::run_connection(&cfg.casper_url, &agent_key, cfg.inference_base_url.as_deref(), &client).await {
+                match ws::run_connection(&casper_url, &entry.key, &entry.inference_url, &client).await {
                     Ok(()) => {
-                        tracing::info!(key_prefix = %&agent_key[..12.min(agent_key.len())], "connection closed gracefully");
+                        tracing::info!(key_prefix = %&entry.key[..12.min(entry.key.len())], "connection closed");
                         backoff_secs = 1;
                     }
                     Err(e) => {
-                        tracing::error!(key_prefix = %&agent_key[..12.min(agent_key.len())], error = %e, "connection failed");
+                        tracing::error!(key_prefix = %&entry.key[..12.min(entry.key.len())], error = %e, "connection failed");
                     }
                 }
-                tracing::info!(backoff_secs, "reconnecting...");
                 tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-                backoff_secs = (backoff_secs * 2).min(max_backoff);
+                backoff_secs = (backoff_secs * 2).min(30);
             }
         }));
     }
 
-    // Wait for all connections (they run forever unless killed)
     futures::future::join_all(handles).await;
     Ok(())
 }

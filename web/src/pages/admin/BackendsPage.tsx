@@ -16,7 +16,7 @@ export default function BackendsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '', inference_base_url: 'http://localhost:11434', inference_server_type: 'openai_compatible', max_concurrent: 8 })
+  const [form, setForm] = useState({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '', max_concurrent: 8 })
   const [editId, setEditId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ base_url: '', api_key_enc: '', region: '', priority: 100 })
 
@@ -43,15 +43,11 @@ export default function BackendsPage() {
     }
     if (form.region) body.region = form.region
     if (form.provider === 'agent') {
-      body.extra_config = {
-        inference_base_url: form.inference_base_url,
-        inference_server_type: form.inference_server_type,
-        max_concurrent: form.max_concurrent,
-      }
+      body.extra_config = { max_concurrent: form.max_concurrent }
     }
     api.post('/api/v1/backends', body).then(() => {
       setShowCreate(false)
-      setForm({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '', inference_base_url: 'http://localhost:11434', inference_server_type: 'openai_compatible', max_concurrent: 8 })
+      setForm({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '', max_concurrent: 8 })
       load()
     }).catch(e => setError(e.response?.data?.message || e.message))
   }
@@ -140,16 +136,11 @@ export default function BackendsPage() {
           )}
           {form.provider === 'agent' && (
             <div className="space-y-3">
-              <p className="text-xs text-slate-500">Agent backends connect via WebSocket. Configure the inference server details below — the sidecar will receive this config automatically on connect.</p>
-              <div className="grid grid-cols-3 gap-3">
-                <input placeholder="Inference URL (e.g. http://localhost:11434)" value={form.inference_base_url} onChange={e => setForm({...form, inference_base_url: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
-                <select value={form.inference_server_type} onChange={e => setForm({...form, inference_server_type: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow">
-                  <option value="openai_compatible">OpenAI-compatible (vLLM, Ollama, LiteLLM)</option>
-                  <option value="tgi">HuggingFace TGI</option>
-                </select>
-                <input type="number" placeholder="Max concurrent" value={form.max_concurrent} onChange={e => setForm({...form, max_concurrent: +e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+              <p className="text-xs text-slate-500">Agent backends connect via WebSocket. Inference URLs are configured on the sidecar, not here. Create the backend, then generate agent keys for the sidecar.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <input type="number" placeholder="Max concurrent requests" value={form.max_concurrent} onChange={e => setForm({...form, max_concurrent: +e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+                <input placeholder="Region (optional)" value={form.region} onChange={e => setForm({...form, region: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
               </div>
-              <input placeholder="Region (optional)" value={form.region} onChange={e => setForm({...form, region: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
             </div>
           )}
           <div className="flex gap-2">

@@ -66,13 +66,10 @@ pub enum WsMessage {
 }
 
 /// Server-side config sent to the sidecar on registration.
-/// Eliminates the need for the sidecar to know anything beyond URL + key.
+/// Only includes platform-managed settings (concurrency, identity).
+/// Inference URLs are a sidecar-local concern — the server doesn't know them.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct RegisterAckConfig {
-    #[serde(default)]
-    pub inference_base_url: Option<String>,
-    #[serde(default)]
-    pub inference_server_type: Option<String>,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: u32,
     #[serde(default)]

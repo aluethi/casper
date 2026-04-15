@@ -92,7 +92,7 @@ pub struct InferenceUsage {
 pub async fn run_connection(
     casper_url: &str,
     agent_key: &str,
-    inference_base_url_override: Option<&str>,
+    inference_url: &str,
     http_client: &reqwest::Client,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let url = url::Url::parse(casper_url)?;
@@ -123,20 +123,14 @@ pub async fn run_connection(
     // Wait for RegisterAck with server-pushed config
     let server_config = wait_for_ack(&mut ws_source).await?;
 
-    // Resolve inference URL: local override > server config > default
-    let inference_base_url = inference_base_url_override.map(|s| s.to_string())
-        .or(server_config.inference_base_url.clone())
-        .unwrap_or_else(|| "http://localhost:11434".to_string());
-    let inference_type = server_config.inference_server_type.clone()
-        .unwrap_or_else(|| "openai_compatible".to_string());
+    // Inference URL is local config — the server doesn't know about it
+    let inference_base_url = inference_url.to_string();
     let max_concurrent = if server_config.max_concurrent > 0 { server_config.max_concurrent } else { 8 };
 
     tracing::info!(
-        backend_id = %server_config.hostname.as_deref().unwrap_or("?"),
         inference_url = %inference_base_url,
-        inference_type = %inference_type,
         max_concurrent = max_concurrent,
-        "configured by server"
+        "ready to serve requests"
     );
 
     let active_requests = Arc::new(AtomicU32::new(0));
@@ -168,7 +162,7 @@ pub async fn run_connection(
             WsMessage::InferenceRequest { id, model, messages, params, timeout_ms } => {
                 let client = http_client.clone();
                 let base_url = inference_base_url.clone();
-                let srv_type = inference_type.clone();
+                let srv_type = "openai_compatible".to_string();
                 let active = Arc::clone(&active_requests);
                 let sem = Arc::clone(&semaphore);
 
