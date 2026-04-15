@@ -23,9 +23,19 @@
 ## Task 0C — Database migration (tenant-scoped tables)
 **Status:** PASSED
 **Completed:** 2026-04-15T07:40:00Z
-**Commit:** pending
+**Commit:** d3159fa
 **Summary:** Created 0002_tenant.sql with 19 tenant-scoped tables + RLS policies + conversation_quality view. 26 total tables, 1 view. RLS verified.
 **Files changed:** migrations/0002_tenant.sql
 **Dependencies added:** none
 **Notes:** document_chunks created WITHOUT embedding vector column (pgvector not installed). Will need migration 0003 to add `embedding vector(1536)` column + ivfflat index once pgvector is installed. Changed usage_events index from `(created_at::date)` to just `created_at` because date cast is not immutable. casper role changed from SUPERUSER to NOSUPERUSER so RLS actually works. App should connect as `casper` user, table owner is `sysadm`.
+---
+
+## Task 0D — Server shell
+**Status:** PASSED
+**Completed:** 2026-04-15T07:45:00Z
+**Commit:** pending
+**Summary:** Minimal Axum server with YAML config, PgPool, embedded SQL migrations, /health endpoint, CORS, tracing, graceful shutdown via CTRL+C.
+**Files changed:** casper-server/src/main.rs, casper-server/src/config.rs
+**Dependencies added:** none (all were in workspace from 0A)
+**Notes:** Migration runner uses _migrations tracking table with include_str!() to embed SQL. Config loaded from CASPER_CONFIG env var or default config/casper-server.yaml. The server connects as the casper user. migrations are idempotent (skipped if already applied). Server binds 0.0.0.0:{port}.
 ---
