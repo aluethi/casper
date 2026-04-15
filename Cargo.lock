@@ -333,13 +333,14 @@ name = "casper-auth"
 version = "0.1.0"
 dependencies = [
  "casper-base",
- "ed25519-dalek",
+ "chrono",
  "jsonwebtoken",
- "rand 0.9.4",
+ "ring",
  "serde",
  "serde_json",
- "time",
+ "sqlx",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -2986,6 +2987,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

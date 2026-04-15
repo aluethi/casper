@@ -1,3 +1,5 @@
-/// JWT signing and revocation cache.
-pub struct JwtSigner;
-pub struct RevocationCache;
+mod revocation;
+mod signer;
+
+pub use revocation::RevocationCache;
+pub use signer::JwtSigner;

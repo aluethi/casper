@@ -69,3 +69,13 @@
 **Dependencies added:** ring (dev-dependency for test key generation)
 **Notes:** jsonwebtoken crate uses ring internally. EncodingKey::from_ed_der expects PKCS8 DER for signing. DecodingKey::from_ed_der expects raw 32-byte public key for verification (ring's UnparsedPublicKey). The JwtVerifier stores raw public key bytes. Tests generate keys via ring::signature::Ed25519KeyPair::generate_pkcs8.
 ---
+
+## Task 1D — JWT signing and revocation cache
+**Status:** PASSED
+**Completed:** 2026-04-15T08:10:00Z
+**Commit:** pending
+**Summary:** Implemented JwtSigner (PKCS8 DER, access+refresh tokens), RevocationCache (RwLock<HashSet> + background DB refresh via CancellationToken). 4 casper-auth tests passing.
+**Files changed:** crates/casper-auth/src/signer.rs (new), crates/casper-auth/src/revocation.rs (new), crates/casper-auth/src/lib.rs, crates/casper-auth/Cargo.toml, Cargo.toml
+**Dependencies added:** tokio-util (workspace)
+**Notes:** Access tokens 15 min, refresh tokens 7 days. RevocationCache uses CancellationToken for graceful shutdown. Background refresh from token_revocations table. sign_verify_with_revocation test proves full chain: sign → verify → revoke → reject.
+---
