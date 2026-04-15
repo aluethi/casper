@@ -19,7 +19,7 @@ impl RevocationCache {
 
     /// Add a JTI to the revocation cache.
     pub fn revoke(&self, jti: &str) {
-        let mut set = self.revoked.write().unwrap();
+        let mut set = self.revoked.write().unwrap_or_else(|e| e.into_inner());
         set.insert(jti.to_string());
     }
 
@@ -54,7 +54,7 @@ impl RevocationCache {
             .fetch_all(pool)
             .await?;
 
-        let mut set = self.revoked.write().unwrap();
+        let mut set = self.revoked.write().unwrap_or_else(|e| e.into_inner());
         set.clear();
         for (jti,) in rows {
             set.insert(jti);
@@ -73,7 +73,7 @@ impl Default for RevocationCache {
 
 impl RevocationCheck for RevocationCache {
     fn is_revoked(&self, jti: &str) -> bool {
-        let set = self.revoked.read().unwrap();
+        let set = self.revoked.read().unwrap_or_else(|e| e.into_inner());
         set.contains(jti)
     }
 }
