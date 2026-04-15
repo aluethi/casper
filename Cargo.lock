@@ -452,12 +452,14 @@ dependencies = [
  "async-trait",
  "bytes",
  "casper-base",
+ "casper-catalog",
  "futures",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

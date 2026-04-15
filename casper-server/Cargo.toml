@@ -37,7 +37,7 @@ chrono = { workspace = true }
 ring = "0.17"
 time = { workspace = true }
 bigdecimal = "0.4"
+reqwest = { workspace = true }
 
 [dev-dependencies]
-reqwest = { workspace = true }
 wiremock = { workspace = true }

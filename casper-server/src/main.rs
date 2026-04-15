@@ -30,6 +30,7 @@ pub struct AppState {
     pub jwt_signer: Option<Arc<JwtSigner>>,
     pub jwt_verifier: Option<Arc<JwtVerifier>>,
     pub revocation_cache: RevocationCache,
+    pub http_client: reqwest::Client,
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -196,6 +197,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .allow_methods(Any)
     .allow_headers(Any);
 
+    // HTTP client for LLM proxy calls
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("failed to build HTTP client");
+
     let state = AppState {
         config: Arc::new(config.clone()),
         db: main_pool.clone(),
@@ -207,6 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         jwt_signer,
         jwt_verifier: jwt_verifier.clone(),
         revocation_cache: revocation_cache.clone(),
+        http_client,
     };
 
     // Auth middleware state
@@ -233,6 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::quota_routes::quota_router())
         .merge(routes::catalog_routes::catalog_router())
         .merge(routes::deployment_routes::deployment_router())
+        .merge(routes::inference_routes::inference_router())
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             auth::auth_middleware,

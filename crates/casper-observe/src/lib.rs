@@ -4,4 +4,4 @@ mod usage;
 
 pub use audit::{AuditEntry, AuditWriter};
 pub use metrics::RuntimeMetrics;
-pub use usage::UsageRecorder;
+pub use usage::{UsageEvent, UsageRecorder};

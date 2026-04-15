@@ -4,6 +4,7 @@ pub mod backend_routes;
 pub mod catalog_routes;
 pub mod deployment_routes;
 pub mod domain_routes;
+pub mod inference_routes;
 pub mod model_routes;
 pub mod quota_routes;
 pub mod secret_routes;

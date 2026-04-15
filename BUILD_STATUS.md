@@ -169,3 +169,13 @@
 **Dependencies added:** bigdecimal (casper-server)
 **Notes:** NUMERIC(10,6) columns use BigDecimal for sqlx decoding, converted to f64 in JSON responses. ModelRow and CatalogRow use #[derive(sqlx::FromRow)] structs (tuples limited to 16 fields). Backend responses never include api_key_enc. Deployment creation validates: model published, quota allocated, slug unique. Deployment test endpoint resolves backend sequence using unnest with ordinality.
 ---
+
+## Tasks 3F-3I — Routing engine, provider adapters, inference endpoint
+**Status:** PASSED
+**Completed:** 2026-04-15T09:30:00Z
+**Commit:** pending
+**Summary:** Implemented routing engine in casper-catalog (resolve_deployment, check_quota, merge_params). Anthropic and OpenAI provider adapters in casper-proxy with dispatch_with_retry (retry + fallback). POST /v1/chat/completions and GET /v1/models inference endpoints. 18 unit tests passing.
+**Files changed:** crates/casper-catalog/src/routing.rs (new), crates/casper-proxy/src/types.rs, anthropic.rs, openai.rs, dispatch.rs (all new), casper-server/src/routes/inference_routes.rs (new), plus lib.rs and Cargo.toml updates
+**Dependencies added:** casper-catalog added to casper-proxy deps, reqwest moved from dev to regular dep in casper-server, reqwest::Client added to AppState
+**Notes:** Anthropic adapter extracts system message separately (Anthropic format), handles cache tokens (cache_read_input_tokens, cache_creation_input_tokens). OpenAI adapter handles tool_calls and cached_tokens in prompt_tokens_details. dispatch_with_retry skips retries for non-retryable errors (400,401,403,404). Streaming not yet implemented — returns 400 if stream=true. Usage events recorded async via tokio::spawn. GET /v1/models filters by three-part scopes.
+---

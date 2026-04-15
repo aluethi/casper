@@ -1,2 +1,6 @@
 /// Model catalog, backends, quotas, deployments, and routing.
-pub struct ModelCatalog;
+pub mod routing;
+
+pub use routing::{
+    ResolvedBackend, ResolvedDeployment, check_quota, merge_params, resolve_deployment,
+};
