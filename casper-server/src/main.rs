@@ -2,6 +2,7 @@ mod config;
 
 use std::sync::Arc;
 use axum::{Json, Router, extract::State, routing::get};
+use casper_observe::{AuditWriter, RuntimeMetrics, UsageRecorder};
 use serde_json::json;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -16,6 +17,9 @@ pub struct AppState {
     pub config: Arc<ServerConfig>,
     pub db: PgPool,
     pub analytics_db: PgPool,
+    pub audit: AuditWriter,
+    pub usage: UsageRecorder,
+    pub metrics: RuntimeMetrics,
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -34,8 +38,11 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
+async fn metrics_handler(State(state): State<AppState>) -> String {
+    state.metrics.render()
+}
+
 async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    // Create migrations tracking table if it doesn't exist
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS _migrations (
             name TEXT PRIMARY KEY,
@@ -45,7 +52,6 @@ async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>>
     .execute(pool)
     .await?;
 
-    // Run migrations in order
     let migration_files = [
         ("0001_platform", include_str!("../../migrations/0001_platform.sql")),
         ("0002_tenant", include_str!("../../migrations/0002_tenant.sql")),
@@ -77,19 +83,16 @@ async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>>
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,sqlx=warn".parse().unwrap()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Load config
     let config_path = std::env::var("CASPER_CONFIG")
         .unwrap_or_else(|_| "config/casper-server.yaml".to_string());
     let config = ServerConfig::load(&config_path)?;
     tracing::info!("Loaded config from {config_path}");
 
-    // Create database pools
     let main_pool = PgPoolOptions::new()
         .max_connections(config.database.main_pool_size)
         .connect(&config.database.url)
@@ -101,11 +104,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&config.database.url)
         .await?;
 
-    // Run migrations
     run_migrations(&main_pool).await?;
     tracing::info!("Migrations complete");
 
-    // Build CORS layer
+    // Start observability
+    let (audit, _audit_handle) = AuditWriter::start(main_pool.clone(), 10_000);
+    let usage = UsageRecorder::new(main_pool.clone());
+    let metrics = RuntimeMetrics::new();
+
     let cors = if config.listen.cors_origins.is_empty() {
         CorsLayer::new().allow_origin(Any)
     } else {
@@ -124,11 +130,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: Arc::new(config.clone()),
         db: main_pool,
         analytics_db: analytics_pool,
+        audit,
+        usage,
+        metrics,
     };
 
-    // Build router
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

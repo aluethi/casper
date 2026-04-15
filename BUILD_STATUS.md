@@ -109,3 +109,13 @@
 **Dependencies added:** none
 **Notes:** AuditWriter uses try_send to never block callers. Background task receives entries, drains up to 100 per batch, inserts individually (could be optimized to multi-row INSERT later). UsageRecorder tracks all four token types (input, output, cache_read, cache_write). RuntimeMetrics has counters for LLM calls, tool calls, actor lifecycle, and HTTP requests.
 ---
+
+## Task 1H — Usage recorder and metrics endpoint
+**Status:** PASSED
+**Completed:** 2026-04-15T08:30:00Z
+**Commit:** pending
+**Summary:** Wired AuditWriter, UsageRecorder, RuntimeMetrics into AppState. Added GET /metrics endpoint returning Prometheus text format. Verified both /health and /metrics work.
+**Files changed:** casper-server/src/main.rs
+**Dependencies added:** none
+**Notes:** AppState now carries audit, usage, metrics. Metrics endpoint returns Prometheus text format via RuntimeMetrics::render().
+---
