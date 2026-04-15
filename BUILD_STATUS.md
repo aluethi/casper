@@ -249,3 +249,13 @@
 **Dependencies added:** react, react-dom, react-router-dom, zustand, axios, vite, tailwindcss, typescript
 **Notes:** Vite dev server proxies /api, /auth, /v1, /health to localhost:3000. Auth store persists to localStorage. ProtectedRoute component redirects to /login. Layout has sidebar with Inference/Agents/Settings sections. All pages are placeholder stubs ready for real implementation in 10B-10L.
 ---
+
+## Tasks 10B-10L — Frontend pages implementation
+**Status:** PASSED
+**Completed:** 2026-04-15T13:00:00Z
+**Commit:** pending
+**Summary:** All 12 pages fully implemented with real API calls: Catalog (card grid + filters), Deployments (table + create), API Keys (create shows key once), Agents (list + builder with Config/Chat/YAML tabs), Knowledge (upload + search), Memory (agent + tenant with version history), Conversations (filterable + inline message view + outcome), Usage (stats + events table), Audit (filterable table), Admin Users (CRUD), Admin Secrets (set/delete). Build: 276KB JS (84KB gzip).
+**Files changed:** web/src/pages/ (12 files rewritten from stubs to full implementations)
+**Dependencies added:** none
+**Notes:** AgentBuilderPage has 3 tabs: Config (editable fields + JSON editors for prompt_stack/tools), Chat (real-time via POST /run with tool call display), YAML (export preview). All pages use useState/useEffect, Tailwind utilities, loading/error/empty states. No external UI libraries — pure HTML + Tailwind.
+---
