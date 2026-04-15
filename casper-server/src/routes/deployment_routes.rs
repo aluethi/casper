@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -155,14 +156,17 @@ async fn create_deployment(
 ) -> Result<Json<DeploymentResponse>, CasperError> {
     guard.require("config:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    // Validate model exists and is published
+    // Validate model exists and is published (models table has no RLS)
     let model_check: Option<(bool, bool)> = sqlx::query_as(
         "SELECT published, is_active FROM models WHERE id = $1"
     )
     .bind(body.model_id)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -181,9 +185,9 @@ async fn create_deployment(
     let has_quota: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM model_quotas WHERE tenant_id = $1 AND model_id = $2)"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(body.model_id)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -204,7 +208,7 @@ async fn create_deployment(
          RETURNING {DEPLOYMENT_COLUMNS}"
     ))
     .bind(id)
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(body.model_id)
     .bind(&body.name)
     .bind(&body.slug)
@@ -215,7 +219,7 @@ async fn create_deployment(
     .bind(body.timeout_ms)
     .bind(&body.default_params)
     .bind(body.rate_limit_rpm)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(ref db_err)
@@ -225,6 +229,9 @@ async fn create_deployment(
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(row_to_response(row)))
 }
@@ -237,14 +244,18 @@ async fn list_deployments(
 ) -> Result<Json<PaginatedResponse<DeploymentResponse>>, CasperError> {
     guard.require("inference:call")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM model_deployments WHERE tenant_id = $1"
     )
-    .bind(tenant_id)
-    .fetch_one(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -253,12 +264,15 @@ async fn list_deployments(
          WHERE tenant_id = $1
          ORDER BY created_at DESC LIMIT $2 OFFSET $3"
     ))
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(params.limit())
     .bind(offset)
-    .fetch_all(&state.db_owner)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
 
@@ -280,16 +294,22 @@ async fn get_deployment(
 ) -> Result<Json<DeploymentResponse>, CasperError> {
     guard.require("inference:call")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<DeploymentRow> = sqlx::query_as(&format!(
         "SELECT {DEPLOYMENT_COLUMNS} FROM model_deployments WHERE id = $1 AND tenant_id = $2"
     ))
     .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("deployment {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -304,7 +324,10 @@ async fn update_deployment(
 ) -> Result<Json<DeploymentResponse>, CasperError> {
     guard.require("config:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<DeploymentRow> = sqlx::query_as(&format!(
         "UPDATE model_deployments SET
@@ -321,7 +344,7 @@ async fn update_deployment(
          RETURNING {DEPLOYMENT_COLUMNS}"
     ))
     .bind(id)
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&body.name)
     .bind(&body.slug)
     .bind(&body.backend_sequence)
@@ -331,7 +354,7 @@ async fn update_deployment(
     .bind(body.timeout_ms)
     .bind(&body.default_params)
     .bind(body.rate_limit_rpm)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(ref db_err)
@@ -341,6 +364,9 @@ async fn update_deployment(
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("deployment {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -354,7 +380,10 @@ async fn delete_deployment(
 ) -> Result<Json<DeploymentResponse>, CasperError> {
     guard.require("config:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<DeploymentRow> = sqlx::query_as(&format!(
         "UPDATE model_deployments SET is_active = false
@@ -362,10 +391,13 @@ async fn delete_deployment(
          RETURNING {DEPLOYMENT_COLUMNS}"
     ))
     .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("deployment {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -379,7 +411,10 @@ async fn test_deployment(
 ) -> Result<Json<TestRouteResponse>, CasperError> {
     guard.require("inference:call")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Fetch the deployment
     let dep: Option<DeploymentTestRow> = sqlx::query_as(
@@ -387,8 +422,8 @@ async fn test_deployment(
          WHERE id = $1 AND tenant_id = $2 AND is_active = true"
     )
     .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -400,6 +435,7 @@ async fn test_deployment(
 
     // Resolve backends: if backend_sequence is specified, use those in order;
     // otherwise fall back to platform_backend_models for the model.
+    // Note: platform_backends has no RLS, but querying it via the casper user is fine.
     let backends: Vec<ResolvedBackendRow> = if backend_sequence.is_empty() {
         sqlx::query_as(
             "SELECT pb.id, pb.name, pb.provider, pb.base_url, pbm.priority
@@ -409,7 +445,7 @@ async fn test_deployment(
              ORDER BY pbm.priority"
         )
         .bind(model_id)
-        .fetch_all(&state.db_owner)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
     } else {
@@ -423,10 +459,13 @@ async fn test_deployment(
              ORDER BY s.ord"
         )
         .bind(&backend_sequence)
-        .fetch_all(&state.db_owner)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
     };
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let resolved = backends
         .into_iter()

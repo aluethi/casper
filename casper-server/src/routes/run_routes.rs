@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -93,8 +94,12 @@ async fn run_agent(
     // Auth: check agents:{name}:run scope
     guard.require(&format!("agents:{name}:run"))?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
     let actor = guard.0.actor();
+
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Verify agent exists and is active
     let agent_exists: bool = sqlx::query_scalar(
@@ -103,9 +108,9 @@ async fn run_agent(
             WHERE tenant_id = $1 AND name = $2 AND is_active = true
         )",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -126,8 +131,8 @@ async fn run_agent(
                 )",
             )
             .bind(id)
-            .bind(tenant_id)
-            .fetch_one(&state.db_owner)
+            .bind(tenant_id.0)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -149,16 +154,19 @@ async fn run_agent(
                  VALUES ($1, $2, $3, 'active', $4)",
             )
             .bind(conv_id)
-            .bind(tenant_id)
+            .bind(tenant_id.0)
             .bind(&name)
             .bind(&title)
-            .execute(&state.db_owner)
+            .execute(&mut *tx)
             .await
             .map_err(|e| CasperError::Internal(format!("DB error creating conversation: {e}")))?;
 
             conv_id
         }
     };
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // If async mode, spawn a background task
     if body.r#async {
@@ -174,7 +182,7 @@ async fn run_agent(
         tokio::spawn(async move {
             let result = execute_run(
                 &state_clone,
-                tenant_id,
+                tenant_id.0,
                 &name_clone,
                 conversation_id,
                 &message,
@@ -208,7 +216,7 @@ async fn run_agent(
         // Sync mode: run directly
         let run_resp = execute_run(
             &state,
-            tenant_id,
+            tenant_id.0,
             &name,
             conversation_id,
             &body.message,
@@ -294,50 +302,63 @@ async fn execute_run(
 
     // For the placeholder path (engine failure), store user+assistant messages manually
     // since the engine didn't get far enough to store them.
-    if usage.llm_calls == 0 {
-        // Store user message
-        sqlx::query(
-            "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
-             VALUES ($1, $2, $3, 'user', $4, $5, $6)
-             ON CONFLICT DO NOTHING",
-        )
-        .bind(Uuid::now_v7())
-        .bind(tenant_id)
-        .bind(conversation_id)
-        .bind(&serde_json::Value::String(message.to_string()))
-        .bind((message.len() / 4) as i32)
-        .bind(author)
-        .execute(&state.db_owner)
-        .await
-        .ok();
+    let tid = casper_base::TenantId(tenant_id);
+    let tdb = TenantDb::new(state.db.clone(), tid);
 
-        // Store placeholder assistant response
-        sqlx::query(
-            "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
-             VALUES ($1, $2, $3, 'assistant', $4, $5, $6)",
-        )
-        .bind(Uuid::now_v7())
-        .bind(tenant_id)
-        .bind(conversation_id)
-        .bind(&serde_json::Value::String(assistant_text.clone()))
-        .bind((assistant_text.len() / 4) as i32)
-        .bind(agent_name)
-        .execute(&state.db_owner)
-        .await
-        .ok();
+    if usage.llm_calls == 0 {
+        if let Ok(mut tx) = tdb.begin().await {
+            // Store user message
+            sqlx::query(
+                "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
+                 VALUES ($1, $2, $3, 'user', $4, $5, $6)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(Uuid::now_v7())
+            .bind(tenant_id)
+            .bind(conversation_id)
+            .bind(&serde_json::Value::String(message.to_string()))
+            .bind((message.len() / 4) as i32)
+            .bind(author)
+            .execute(&mut *tx)
+            .await
+            .ok();
+
+            // Store placeholder assistant response
+            sqlx::query(
+                "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
+                 VALUES ($1, $2, $3, 'assistant', $4, $5, $6)",
+            )
+            .bind(Uuid::now_v7())
+            .bind(tenant_id)
+            .bind(conversation_id)
+            .bind(&serde_json::Value::String(assistant_text.clone()))
+            .bind((assistant_text.len() / 4) as i32)
+            .bind(agent_name)
+            .execute(&mut *tx)
+            .await
+            .ok();
+
+            tx.commit().await.ok();
+        }
     }
 
     // Get the most recent assistant message for the response
-    let msg_row: Option<(Uuid, String, serde_json::Value, OffsetDateTime)> = sqlx::query_as(
-        "SELECT id, role, content, created_at FROM messages
-         WHERE conversation_id = $1 AND role = 'assistant'
-         ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(conversation_id)
-    .fetch_optional(&state.db_owner)
-    .await
-    .ok()
-    .flatten();
+    let msg_row: Option<(Uuid, String, serde_json::Value, OffsetDateTime)> = if let Ok(mut tx) = tdb.begin().await {
+        let row = sqlx::query_as(
+            "SELECT id, role, content, created_at FROM messages
+             WHERE conversation_id = $1 AND role = 'assistant'
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(conversation_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .ok()
+        .flatten();
+        tx.commit().await.ok();
+        row
+    } else {
+        None
+    };
 
     let (msg_id, msg_role, msg_content, msg_created) = msg_row.unwrap_or_else(|| {
         (Uuid::now_v7(), "assistant".to_string(), serde_json::Value::String(assistant_text.clone()), OffsetDateTime::now_utc())

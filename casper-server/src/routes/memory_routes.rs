@@ -4,6 +4,7 @@ use axum::{
     routing::get,
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -106,18 +107,24 @@ async fn get_agent_memory(
 ) -> Result<Json<AgentMemoryResponse>, CasperError> {
     guard.require("memory:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<AgentMemoryRow> = sqlx::query_as(
         "SELECT tenant_id, agent_name, content, token_count, version, updated_at
          FROM agent_memory
          WHERE tenant_id = $1 AND agent_name = $2"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("agent memory '{name}'")))?;
     Ok(Json(agent_memory_to_response(r)))
@@ -132,7 +139,11 @@ async fn update_agent_memory(
 ) -> Result<Json<AgentMemoryResponse>, CasperError> {
     guard.require("memory:write")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let token_count = estimate_tokens(&body.content);
     let actor = guard.0.actor();
 
@@ -142,9 +153,9 @@ async fn update_agent_memory(
          FROM agent_memory
          WHERE tenant_id = $1 AND agent_name = $2"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -157,13 +168,13 @@ async fn update_agent_memory(
                  VALUES ($1, $2, $3, $4, $5, $6, $7)"
             )
             .bind(history_id)
-            .bind(tenant_id)
+            .bind(tenant_id.0)
             .bind(&name)
             .bind(old_version)
             .bind(&old_content)
             .bind(old_tokens)
             .bind(&actor)
-            .execute(&state.db_owner)
+            .execute(&mut *tx)
             .await
             .map_err(|e| CasperError::Internal(format!("DB error archiving memory: {e}")))?;
 
@@ -183,14 +194,17 @@ async fn update_agent_memory(
             updated_at = now()
          RETURNING tenant_id, agent_name, content, token_count, version, updated_at"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
     .bind(&body.content)
     .bind(token_count)
     .bind(new_version)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(agent_memory_to_response(row)))
 }
@@ -203,7 +217,10 @@ async fn list_agent_memory_history(
 ) -> Result<Json<Vec<AgentMemoryHistoryResponse>>, CasperError> {
     guard.require("memory:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<AgentMemoryHistoryRow> = sqlx::query_as(
         "SELECT id, tenant_id, agent_name, version, content, token_count, updated_by, created_at
@@ -211,11 +228,14 @@ async fn list_agent_memory_history(
          WHERE tenant_id = $1 AND agent_name = $2
          ORDER BY version DESC"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
-    .fetch_all(&state.db_owner)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(agent_history_to_response).collect();
     Ok(Json(data))
@@ -229,19 +249,25 @@ async fn get_agent_memory_version(
 ) -> Result<Json<AgentMemoryHistoryResponse>, CasperError> {
     guard.require("memory:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<AgentMemoryHistoryRow> = sqlx::query_as(
         "SELECT id, tenant_id, agent_name, version, content, token_count, updated_by, created_at
          FROM agent_memory_history
          WHERE tenant_id = $1 AND agent_name = $2 AND version = $3"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
     .bind(version)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("agent memory '{name}' version {version}")))?;
     Ok(Json(agent_history_to_response(r)))
@@ -327,17 +353,23 @@ async fn get_tenant_memory(
 ) -> Result<Json<TenantMemoryResponse>, CasperError> {
     guard.require("memory:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<TenantMemoryRow> = sqlx::query_as(
         "SELECT tenant_id, content, token_count, version, updated_at, updated_by
          FROM tenant_memory
          WHERE tenant_id = $1"
     )
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound("tenant memory".to_string()))?;
     Ok(Json(tenant_memory_to_response(r)))
@@ -351,7 +383,11 @@ async fn update_tenant_memory(
 ) -> Result<Json<TenantMemoryResponse>, CasperError> {
     guard.require("memory:write")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let token_count = estimate_tokens(&body.content);
     let actor = guard.0.actor();
 
@@ -361,8 +397,8 @@ async fn update_tenant_memory(
          FROM tenant_memory
          WHERE tenant_id = $1"
     )
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -375,12 +411,12 @@ async fn update_tenant_memory(
                  VALUES ($1, $2, $3, $4, $5, $6)"
             )
             .bind(history_id)
-            .bind(tenant_id)
+            .bind(tenant_id.0)
             .bind(old_version)
             .bind(&old_content)
             .bind(old_tokens)
             .bind(&old_updated_by)
-            .execute(&state.db_owner)
+            .execute(&mut *tx)
             .await
             .map_err(|e| CasperError::Internal(format!("DB error archiving memory: {e}")))?;
 
@@ -401,14 +437,17 @@ async fn update_tenant_memory(
             updated_by = EXCLUDED.updated_by
          RETURNING tenant_id, content, token_count, version, updated_at, updated_by"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&body.content)
     .bind(token_count)
     .bind(new_version)
     .bind(&actor)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(tenant_memory_to_response(row)))
 }
@@ -420,7 +459,10 @@ async fn list_tenant_memory_history(
 ) -> Result<Json<Vec<TenantMemoryHistoryResponse>>, CasperError> {
     guard.require("memory:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<TenantMemoryHistoryRow> = sqlx::query_as(
         "SELECT id, tenant_id, version, content, token_count, updated_by, created_at
@@ -428,10 +470,13 @@ async fn list_tenant_memory_history(
          WHERE tenant_id = $1
          ORDER BY version DESC"
     )
-    .bind(tenant_id)
-    .fetch_all(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(tenant_history_to_response).collect();
     Ok(Json(data))
@@ -445,18 +490,24 @@ async fn get_tenant_memory_version(
 ) -> Result<Json<TenantMemoryHistoryResponse>, CasperError> {
     guard.require("memory:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<TenantMemoryHistoryRow> = sqlx::query_as(
         "SELECT id, tenant_id, version, content, token_count, updated_by, created_at
          FROM tenant_memory_history
          WHERE tenant_id = $1 AND version = $2"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(version)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("tenant memory version {version}")))?;
     Ok(Json(tenant_history_to_response(r)))

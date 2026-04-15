@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -86,6 +87,11 @@ async fn create_api_key(
 ) -> Result<Json<ApiKeyCreatedResponse>, CasperError> {
     guard.require("keys:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let id = Uuid::now_v7();
     let key = format!("csk-{}", Uuid::now_v7());
     let key_hash = hex::encode(Sha256::digest(key.as_bytes()));
@@ -97,13 +103,13 @@ async fn create_api_key(
          RETURNING id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by"
     )
     .bind(id)
-    .bind(guard.0.tenant_id.0)
+    .bind(tenant_id.0)
     .bind(&body.name)
     .bind(&body.scopes)
     .bind(&key_hash)
     .bind(&key_prefix)
     .bind(guard.0.actor())
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("api_keys_tenant_id_name_key") => {
@@ -111,6 +117,9 @@ async fn create_api_key(
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(ApiKeyCreatedResponse {
         id: row.id,
@@ -133,10 +142,15 @@ async fn list_api_keys(
 ) -> Result<Json<PaginatedResponse<ApiKeyResponse>>, CasperError> {
     guard.require("keys:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM api_keys")
-        .fetch_one(&state.db_owner)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -146,9 +160,12 @@ async fn list_api_keys(
     )
     .bind(params.limit())
     .bind(offset)
-    .fetch_all(&state.db_owner)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
 
@@ -170,14 +187,22 @@ async fn get_api_key(
 ) -> Result<Json<ApiKeyResponse>, CasperError> {
     guard.require("keys:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let row: Option<ApiKeyRow> = sqlx::query_as(
         "SELECT id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by
          FROM api_keys WHERE id = $1"
     )
     .bind(id)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("API key {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -192,6 +217,11 @@ async fn update_api_key(
 ) -> Result<Json<ApiKeyResponse>, CasperError> {
     guard.require("keys:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let row: Option<ApiKeyRow> = sqlx::query_as(
         "UPDATE api_keys SET
             name = COALESCE($2, name),
@@ -202,9 +232,12 @@ async fn update_api_key(
     .bind(id)
     .bind(&body.name)
     .bind(&body.scopes)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("API key {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -218,15 +251,23 @@ async fn delete_api_key(
 ) -> Result<Json<ApiKeyResponse>, CasperError> {
     guard.require("keys:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let row: Option<ApiKeyRow> = sqlx::query_as(
         "UPDATE api_keys SET is_active = false
          WHERE id = $1
          RETURNING id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by"
     )
     .bind(id)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("API key {id}")))?;
     Ok(Json(row_to_response(r)))

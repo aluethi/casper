@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -230,7 +231,7 @@ async fn upload_document(
 ) -> Result<Json<DocumentResponse>, CasperError> {
     guard.require("knowledge:write")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
     let document_id = Uuid::now_v7();
 
     let mut file_data: Option<Vec<u8>> = None;
@@ -282,7 +283,7 @@ async fn upload_document(
     let content_type = content_type_from_ext(&original_filename);
 
     // Create storage directory
-    let dir = format!("data/knowledge/{tenant_id}");
+    let dir = format!("data/knowledge/{}", tenant_id.0);
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| CasperError::Internal(format!("failed to create directory: {e}")))?;
@@ -300,6 +301,10 @@ async fn upload_document(
     let chunks = chunk_text(&text_content, 2000);
     let chunk_count = chunks.len() as i32;
 
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     // Insert document
     let row: DocumentRow = sqlx::query_as(
         "INSERT INTO documents (id, tenant_id, name, source, content_type, file_path, token_count, chunk_count, created_by)
@@ -307,7 +312,7 @@ async fn upload_document(
          RETURNING id, tenant_id, name, source, content_type, file_path, token_count, chunk_count, created_at, created_by"
     )
     .bind(document_id)
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&doc_name)
     .bind(&source)
     .bind(content_type)
@@ -315,7 +320,7 @@ async fn upload_document(
     .bind(total_tokens)
     .bind(chunk_count)
     .bind(guard.0.actor())
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -329,15 +334,18 @@ async fn upload_document(
              VALUES ($1, $2, $3, $4, $5, $6)"
         )
         .bind(chunk_id)
-        .bind(tenant_id)
+        .bind(tenant_id.0)
         .bind(document_id)
         .bind(i as i32)
         .bind(chunk_content)
         .bind(chunk_tokens)
-        .execute(&state.db_owner)
+        .execute(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error inserting chunk: {e}")))?;
     }
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(row_to_response(row)))
 }
@@ -349,17 +357,23 @@ async fn list_documents(
 ) -> Result<Json<Vec<DocumentResponse>>, CasperError> {
     guard.require("knowledge:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<DocumentRow> = sqlx::query_as(
         "SELECT id, tenant_id, name, source, content_type, file_path, token_count, chunk_count, created_at, created_by
          FROM documents WHERE tenant_id = $1
          ORDER BY created_at DESC"
     )
-    .bind(tenant_id)
-    .fetch_all(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
     Ok(Json(data))
@@ -373,15 +387,18 @@ async fn get_document(
 ) -> Result<Json<DocumentDetailResponse>, CasperError> {
     guard.require("knowledge:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<DocumentRow> = sqlx::query_as(
         "SELECT id, tenant_id, name, source, content_type, file_path, token_count, chunk_count, created_at, created_by
          FROM documents WHERE id = $1 AND tenant_id = $2"
     )
     .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -393,10 +410,13 @@ async fn get_document(
          ORDER BY chunk_index"
     )
     .bind(id)
-    .bind(tenant_id)
-    .fetch_all(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let chunks: Vec<ChunkResponse> = chunk_rows.into_iter().map(chunk_row_to_response).collect();
 
@@ -421,15 +441,18 @@ async fn delete_document(
 ) -> Result<Json<serde_json::Value>, CasperError> {
     guard.require("knowledge:write")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Get file path before deleting
     let file_path: Option<(String,)> = sqlx::query_as(
         "SELECT file_path FROM documents WHERE id = $1 AND tenant_id = $2"
     )
     .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -438,20 +461,23 @@ async fn delete_document(
     // Delete chunks
     sqlx::query("DELETE FROM document_chunks WHERE document_id = $1 AND tenant_id = $2")
         .bind(id)
-        .bind(tenant_id)
-        .execute(&state.db_owner)
+        .bind(tenant_id.0)
+        .execute(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Delete document
     sqlx::query("DELETE FROM documents WHERE id = $1 AND tenant_id = $2")
         .bind(id)
-        .bind(tenant_id)
-        .execute(&state.db_owner)
+        .bind(tenant_id.0)
+        .execute(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    // Delete file (best-effort)
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    // Delete file (best-effort, after DB commit)
     let _ = tokio::fs::remove_file(&file_path.0).await;
 
     Ok(Json(serde_json::json!({ "deleted": true })))
@@ -465,7 +491,11 @@ async fn search_knowledge(
 ) -> Result<Json<Vec<SearchResult>>, CasperError> {
     guard.require("knowledge:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let pattern = format!("%{}%", body.query);
     let limit = body.limit.min(100);
 
@@ -477,12 +507,15 @@ async fn search_knowledge(
          ORDER BY dc.chunk_index
          LIMIT $3"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&pattern)
     .bind(limit)
-    .fetch_all(&state.db_owner)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(search_row_to_response).collect();
     Ok(Json(data))

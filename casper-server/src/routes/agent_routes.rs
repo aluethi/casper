@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -83,7 +84,10 @@ async fn create_agent(
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Validate model_deployment references an active deployment for this tenant
     let deployment_exists: bool = sqlx::query_scalar(
@@ -92,9 +96,9 @@ async fn create_agent(
             WHERE tenant_id = $1 AND slug = $2 AND is_active = true
         )"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&body.model_deployment)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -114,7 +118,7 @@ async fn create_agent(
                    prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by"
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&body.name)
     .bind(&body.display_name)
     .bind(&body.description)
@@ -123,7 +127,7 @@ async fn create_agent(
     .bind(&body.tools)
     .bind(&body.config)
     .bind(guard.0.actor())
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(ref db_err)
@@ -133,6 +137,9 @@ async fn create_agent(
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(row))
 }
@@ -145,7 +152,10 @@ async fn list_agents(
 ) -> Result<Json<Vec<AgentResponse>>, CasperError> {
     guard.require("agents:run")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<AgentResponse> = if params.include_inactive {
         sqlx::query_as(
@@ -154,8 +164,8 @@ async fn list_agents(
              FROM agents WHERE tenant_id = $1
              ORDER BY name"
         )
-        .bind(tenant_id)
-        .fetch_all(&state.db_owner)
+        .bind(tenant_id.0)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
     } else {
@@ -165,11 +175,14 @@ async fn list_agents(
              FROM agents WHERE tenant_id = $1 AND is_active = true
              ORDER BY name"
         )
-        .bind(tenant_id)
-        .fetch_all(&state.db_owner)
+        .bind(tenant_id.0)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
     };
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(rows))
 }
@@ -182,18 +195,24 @@ async fn get_agent(
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:run")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<AgentResponse> = sqlx::query_as(
         "SELECT id, tenant_id, name, display_name, description, model_deployment,
                 prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by
          FROM agents WHERE tenant_id = $1 AND name = $2"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
     Ok(Json(r))
@@ -208,7 +227,10 @@ async fn update_agent(
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // If model_deployment is being updated, validate it
     if let Some(ref slug) = body.model_deployment {
@@ -218,9 +240,9 @@ async fn update_agent(
                 WHERE tenant_id = $1 AND slug = $2 AND is_active = true
             )"
         )
-        .bind(tenant_id)
+        .bind(tenant_id.0)
         .bind(slug)
-        .fetch_one(&state.db_owner)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -245,7 +267,7 @@ async fn update_agent(
          RETURNING id, tenant_id, name, display_name, description, model_deployment,
                    prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
     .bind(&body.display_name)
     .bind(&body.description)
@@ -253,9 +275,12 @@ async fn update_agent(
     .bind(&body.prompt_stack)
     .bind(&body.tools)
     .bind(&body.config)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
     Ok(Json(r))
@@ -269,7 +294,10 @@ async fn delete_agent(
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<AgentResponse> = sqlx::query_as(
         "UPDATE agents SET is_active = false, updated_at = now()
@@ -277,11 +305,14 @@ async fn delete_agent(
          RETURNING id, tenant_id, name, display_name, description, model_deployment,
                    prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by"
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
     Ok(Json(r))
@@ -310,18 +341,24 @@ async fn export_agent(
 ) -> Result<axum::response::Response, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<AgentResponse> = sqlx::query_as(
         "SELECT id, tenant_id, name, display_name, description, model_deployment,
                 prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by
          FROM agents WHERE tenant_id = $1 AND name = $2",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&name)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let agent = row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
 
@@ -361,7 +398,10 @@ async fn import_agent(
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let export: AgentExport = serde_yaml::from_str(&body)
         .map_err(|e| CasperError::BadRequest(format!("invalid YAML: {e}")))?;
@@ -373,9 +413,9 @@ async fn import_agent(
             WHERE tenant_id = $1 AND slug = $2 AND is_active = true
         )",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&export.model_deployment)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -390,9 +430,9 @@ async fn import_agent(
     let existing: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM agents WHERE tenant_id = $1 AND name = $2",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&export.name)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -414,14 +454,14 @@ async fn import_agent(
                        prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by",
         )
         .bind(existing_id)
-        .bind(tenant_id)
+        .bind(tenant_id.0)
         .bind(&export.display_name)
         .bind(&export.description)
         .bind(&export.model_deployment)
         .bind(&export.prompt_stack)
         .bind(&export.tools)
         .bind(&export.config)
-        .fetch_one(&state.db_owner)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
     } else {
@@ -434,7 +474,7 @@ async fn import_agent(
                        prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by",
         )
         .bind(id)
-        .bind(tenant_id)
+        .bind(tenant_id.0)
         .bind(&export.name)
         .bind(&export.display_name)
         .bind(&export.description)
@@ -443,10 +483,13 @@ async fn import_agent(
         .bind(&export.tools)
         .bind(&export.config)
         .bind(guard.0.actor())
-        .fetch_one(&state.db_owner)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
     };
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(row))
 }

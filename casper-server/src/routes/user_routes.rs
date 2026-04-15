@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -85,6 +86,11 @@ async fn create_user(
 ) -> Result<Json<UserResponse>, CasperError> {
     guard.require("users:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let id = Uuid::now_v7();
 
     let row: UserRow = sqlx::query_as(
@@ -93,14 +99,14 @@ async fn create_user(
          RETURNING id, tenant_id, subject, role, scopes, email, display_name, last_login_at, created_at, created_by"
     )
     .bind(id)
-    .bind(guard.0.tenant_id.0)
+    .bind(tenant_id.0)
     .bind(&body.subject)
     .bind(&body.role)
     .bind(&body.scopes)
     .bind(&body.email)
     .bind(&body.display_name)
     .bind(guard.0.actor())
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("tenant_users_tenant_id_subject_key") => {
@@ -108,6 +114,9 @@ async fn create_user(
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(row_to_response(row)))
 }
@@ -120,10 +129,15 @@ async fn list_users(
 ) -> Result<Json<PaginatedResponse<UserResponse>>, CasperError> {
     guard.require("users:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tenant_users")
-        .fetch_one(&state.db_owner)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -133,9 +147,12 @@ async fn list_users(
     )
     .bind(params.limit())
     .bind(offset)
-    .fetch_all(&state.db_owner)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
 
@@ -157,14 +174,22 @@ async fn get_user(
 ) -> Result<Json<UserResponse>, CasperError> {
     guard.require("users:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let row: Option<UserRow> = sqlx::query_as(
         "SELECT id, tenant_id, subject, role, scopes, email, display_name, last_login_at, created_at, created_by
          FROM tenant_users WHERE id = $1"
     )
     .bind(id)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("user {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -179,6 +204,11 @@ async fn update_user(
 ) -> Result<Json<UserResponse>, CasperError> {
     guard.require("users:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let row: Option<UserRow> = sqlx::query_as(
         "UPDATE tenant_users SET
             role = COALESCE($2, role),
@@ -191,9 +221,12 @@ async fn update_user(
     .bind(&body.role)
     .bind(&body.scopes)
     .bind(&body.display_name)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("user {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -207,15 +240,23 @@ async fn delete_user(
 ) -> Result<Json<serde_json::Value>, CasperError> {
     guard.require("users:manage")?;
 
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let result = sqlx::query("DELETE FROM tenant_users WHERE id = $1")
         .bind(id)
-        .execute(&state.db_owner)
+        .execute(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     if result.rows_affected() == 0 {
         return Err(CasperError::NotFound(format!("user {id}")));
     }
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }

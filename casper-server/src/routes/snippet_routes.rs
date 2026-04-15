@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -83,7 +84,11 @@ async fn create_snippet(
 ) -> Result<Json<SnippetResponse>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let id = Uuid::now_v7();
     let token_estimate = estimate_tokens(&body.content);
 
@@ -93,13 +98,13 @@ async fn create_snippet(
          RETURNING id, tenant_id, name, display_name, content, token_estimate, created_at, updated_at, created_by"
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&body.name)
     .bind(&body.display_name)
     .bind(&body.content)
     .bind(token_estimate)
     .bind(guard.0.actor())
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("snippets_tenant_id_name_key") => {
@@ -107,6 +112,9 @@ async fn create_snippet(
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(row_to_response(row)))
 }
@@ -118,17 +126,23 @@ async fn list_snippets(
 ) -> Result<Json<Vec<SnippetResponse>>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<SnippetRow> = sqlx::query_as(
         "SELECT id, tenant_id, name, display_name, content, token_estimate, created_at, updated_at, created_by
          FROM snippets WHERE tenant_id = $1
          ORDER BY name"
     )
-    .bind(tenant_id)
-    .fetch_all(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
     Ok(Json(data))
@@ -142,17 +156,23 @@ async fn get_snippet(
 ) -> Result<Json<SnippetResponse>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<SnippetRow> = sqlx::query_as(
         "SELECT id, tenant_id, name, display_name, content, token_estimate, created_at, updated_at, created_by
          FROM snippets WHERE id = $1 AND tenant_id = $2"
     )
     .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("snippet {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -167,7 +187,10 @@ async fn update_snippet(
 ) -> Result<Json<SnippetResponse>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // If content is being updated, compute new token_estimate
     let new_token_estimate: Option<i32> = body.content.as_ref().map(|c| estimate_tokens(c));
@@ -183,12 +206,12 @@ async fn update_snippet(
          RETURNING id, tenant_id, name, display_name, content, token_estimate, created_at, updated_at, created_by"
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&body.name)
     .bind(&body.display_name)
     .bind(&body.content)
     .bind(new_token_estimate)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("snippets_tenant_id_name_key") => {
@@ -196,6 +219,9 @@ async fn update_snippet(
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("snippet {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -209,18 +235,24 @@ async fn delete_snippet(
 ) -> Result<Json<serde_json::Value>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let result = sqlx::query("DELETE FROM snippets WHERE id = $1 AND tenant_id = $2")
         .bind(id)
-        .bind(tenant_id)
-        .execute(&state.db_owner)
+        .bind(tenant_id.0)
+        .execute(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     if result.rows_affected() == 0 {
         return Err(CasperError::NotFound(format!("snippet {id}")));
     }
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }

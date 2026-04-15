@@ -4,6 +4,7 @@ use axum::{
     routing::get,
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -118,6 +119,10 @@ async fn export_training(
 
     // JSONL format: return conversations with messages and quality tier
 
+    let tdb = TenantDb::new(state.db.clone(), casper_base::TenantId(tenant_id));
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     // Query the conversation_quality view for matching conversations
     let conv_rows: Vec<(Uuid, String, Option<String>, OffsetDateTime, String)> = sqlx::query_as(
         "SELECT cq.id, cq.agent_name, cq.outcome, cq.created_at, cq.quality_tier
@@ -136,7 +141,7 @@ async fn export_training(
     .bind(&params.from)
     .bind(&params.to)
     .bind(params.limit)
-    .fetch_all(&state.db_owner)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error querying conversation_quality: {e}")))?;
 
@@ -154,10 +159,13 @@ async fn export_training(
         )
         .bind(tenant_id)
         .bind(&conv_ids)
-        .fetch_all(&state.db_owner)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error fetching messages: {e}")))?
     };
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Group messages by conversation_id
     let mut msg_map: std::collections::HashMap<Uuid, Vec<TrainingMessage>> =
@@ -198,6 +206,10 @@ async fn export_pairs(
     tenant_id: Uuid,
     params: &ExportParams,
 ) -> Result<Json<ExportResponse>, CasperError> {
+    let tdb = TenantDb::new(state.db.clone(), casper_base::TenantId(tenant_id));
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     // Find corrections: feedback entries with type 'correction' and the original message
     let rows: Vec<(Uuid, String, serde_json::Value, String, OffsetDateTime)> = sqlx::query_as(
         "SELECT f.conversation_id, f.agent_name, m.content, f.correction, f.created_at
@@ -217,7 +229,7 @@ async fn export_pairs(
     .bind(&params.from)
     .bind(&params.to)
     .bind(params.limit)
-    .fetch_all(&state.db_owner)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -232,7 +244,7 @@ async fn export_pairs(
         )
         .bind(conv_id)
         .bind(tenant_id)
-        .fetch_optional(&state.db_owner)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -249,6 +261,9 @@ async fn export_pairs(
             created_at,
         });
     }
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(ExportResponse::Pairs(pairs)))
 }

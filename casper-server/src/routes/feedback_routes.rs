@@ -4,6 +4,7 @@ use axum::{
     routing::post,
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -118,6 +119,10 @@ async fn create_feedback(
         _ => {}
     }
 
+    let tdb = TenantDb::new(state.db.clone(), casper_base::TenantId(tenant_id));
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     // Validate message exists and get its conversation_id + agent_name
     let msg_row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
         "SELECT m.id, m.conversation_id, c.agent_name
@@ -127,7 +132,7 @@ async fn create_feedback(
     )
     .bind(body.message_id)
     .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -157,9 +162,12 @@ async fn create_feedback(
     .bind(&body.correction)
     .bind(tags_val)
     .bind(&actor)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(row))
 }
@@ -179,7 +187,10 @@ async fn list_feedback(
         ));
     }
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<FeedbackResponse> = sqlx::query_as(
         "SELECT id, tenant_id, message_id, conversation_id, agent_name, feedback_type,
@@ -193,16 +204,19 @@ async fn list_feedback(
          ORDER BY created_at DESC
          LIMIT $6 OFFSET $7",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&params.agent_name)
     .bind(&params.feedback_type)
     .bind(&params.from)
     .bind(&params.to)
     .bind(params.limit)
     .bind(params.offset)
-    .fetch_all(&state.db_owner)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(rows))
 }

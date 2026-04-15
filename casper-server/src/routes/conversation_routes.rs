@@ -4,6 +4,7 @@ use axum::{
     routing::get,
 };
 use casper_base::CasperError;
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -95,7 +96,11 @@ async fn list_conversations(
 ) -> Result<Json<PaginatedResponse<ConversationResponse>>, CasperError> {
     guard.require("agents:run")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let offset = (params.page.max(1) - 1) * params.per_page.clamp(1, 100);
 
     let count_sql = "SELECT COUNT(*) FROM conversations
@@ -105,11 +110,11 @@ async fn list_conversations(
           AND ($4::TEXT IS NULL OR outcome = $4)";
 
     let total: (i64,) = sqlx::query_as(count_sql)
-        .bind(tenant_id)
+        .bind(tenant_id.0)
         .bind(&params.agent_name)
         .bind(&params.status)
         .bind(&params.outcome)
-        .fetch_one(&state.db_owner)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -124,14 +129,17 @@ async fn list_conversations(
          LIMIT $5 OFFSET $6";
 
     let rows: Vec<ConversationResponse> = sqlx::query_as(list_sql)
-        .bind(tenant_id)
+        .bind(tenant_id.0)
         .bind(&params.agent_name)
         .bind(&params.status)
         .bind(&params.outcome)
         .bind(params.per_page.clamp(1, 100))
         .bind(offset)
-        .fetch_all(&state.db_owner)
+        .fetch_all(&mut *tx)
         .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(PaginatedResponse {
@@ -152,7 +160,10 @@ async fn get_conversation(
 ) -> Result<Json<ConversationDetailResponse>, CasperError> {
     guard.require("agents:run")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let conversation: Option<ConversationResponse> = sqlx::query_as(
         "SELECT id, tenant_id, agent_name, status, title, outcome, outcome_notes, outcome_by, outcome_at, created_at, updated_at
@@ -160,8 +171,8 @@ async fn get_conversation(
          WHERE id = $1 AND tenant_id = $2"
     )
     .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
@@ -174,10 +185,13 @@ async fn get_conversation(
          ORDER BY created_at"
     )
     .bind(id)
-    .bind(tenant_id)
-    .fetch_all(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(ConversationDetailResponse {
         conversation: conv,
@@ -193,18 +207,24 @@ async fn delete_conversation(
 ) -> Result<Json<serde_json::Value>, CasperError> {
     guard.require("agents:manage")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let result = sqlx::query("DELETE FROM conversations WHERE id = $1 AND tenant_id = $2")
         .bind(id)
-        .bind(tenant_id)
-        .execute(&state.db_owner)
+        .bind(tenant_id.0)
+        .execute(&mut *tx)
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     if result.rows_affected() == 0 {
         return Err(CasperError::NotFound(format!("conversation {id}")));
     }
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
@@ -226,7 +246,11 @@ async fn set_outcome(
         )));
     }
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let actor = guard.0.actor();
 
     let row: Option<ConversationResponse> = sqlx::query_as(
@@ -240,13 +264,16 @@ async fn set_outcome(
          RETURNING id, tenant_id, agent_name, status, title, outcome, outcome_notes, outcome_by, outcome_at, created_at, updated_at"
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&body.outcome)
     .bind(&body.outcome_notes)
     .bind(&actor)
-    .fetch_optional(&state.db_owner)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("conversation {id}")))?;
     Ok(Json(r))

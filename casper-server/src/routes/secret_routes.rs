@@ -4,9 +4,9 @@ use axum::{
     routing::post,
 };
 use casper_base::{CasperError, TenantId};
+use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
@@ -51,17 +51,25 @@ async fn set_secret(
     let tenant_id = TenantId(guard.0.tenant_id.0);
 
     // Encrypt via Vault (HKDF per-tenant key derivation + AES-256-GCM)
+    // Vault.set uses its own query with tenant_id in the WHERE clause
     state.vault.set(&state.db_owner, tenant_id, &body.key, body.value.as_bytes()).await?;
 
-    // Fetch the row back for timestamps
+    // Fetch the row back for timestamps via RLS-scoped connection
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
     let row: SecretKeyRow = sqlx::query_as(
         "SELECT key, created_at, updated_at FROM tenant_secrets WHERE tenant_id = $1 AND key = $2"
     )
     .bind(tenant_id.0)
     .bind(&body.key)
-    .fetch_one(&state.db_owner)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(Json(row_to_response(row)))
 }
@@ -73,17 +81,23 @@ async fn list_secrets(
 ) -> Result<Json<Vec<SecretKeyResponse>>, CasperError> {
     guard.require("secrets:read")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = TenantId(guard.0.tenant_id.0);
+    let tdb = TenantDb::new(state.db.clone(), tenant_id);
+    let mut tx = tdb.begin().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<SecretKeyRow> = sqlx::query_as(
         "SELECT key, created_at, updated_at
          FROM tenant_secrets WHERE tenant_id = $1
          ORDER BY key"
     )
-    .bind(tenant_id)
-    .fetch_all(&state.db_owner)
+    .bind(tenant_id.0)
+    .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit().await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
     Ok(Json(data))
