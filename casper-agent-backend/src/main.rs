@@ -3,9 +3,12 @@ mod ws;
 use clap::Parser;
 use serde::Deserialize;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 /// Casper Agent Backend sidecar — connects a local inference server to Casper.
+///
+/// Only two settings are required: the Casper WebSocket URL and the agent key.
+/// Everything else (backend ID, inference server URL, concurrency limits) is
+/// pushed by the server on connect via the register_ack message.
 #[derive(Parser)]
 #[command(name = "casper-agent-backend", version, about)]
 struct Cli {
@@ -16,23 +19,13 @@ struct Cli {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SidecarConfig {
+    /// WebSocket URL: ws://casper.ventoo.ai/agent/connect
     pub casper_url: String,
+    /// Agent backend key: csa-...
     pub agent_key: String,
-    pub backend_id: Uuid,
-    pub inference_server: InferenceServerConfig,
-    #[serde(default = "default_max_concurrent")]
-    pub max_concurrent: u32,
-}
-
-fn default_max_concurrent() -> u32 {
-    8
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct InferenceServerConfig {
-    #[serde(rename = "type")]
-    pub server_type: String,
-    pub base_url: String,
+    /// Optional: override the inference server URL from the server config
+    #[serde(default)]
+    pub inference_base_url: Option<String>,
 }
 
 #[tokio::main]
@@ -53,9 +46,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(
         casper_url = %config.casper_url,
-        server_type = %config.inference_server.server_type,
-        base_url = %config.inference_server.base_url,
-        max_concurrent = config.max_concurrent,
         "starting casper-agent-backend sidecar"
     );
 

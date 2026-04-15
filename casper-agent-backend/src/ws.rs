@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite;
-use uuid::Uuid;
 
 use crate::SidecarConfig;
 
@@ -14,17 +13,17 @@ use crate::SidecarConfig;
 pub enum WsMessage {
     #[serde(rename = "register")]
     Register {
-        backend_id: Uuid,
         hostname: String,
-        inference_server: String,
-        inference_version: String,
-        models_loaded: Vec<String>,
-        max_concurrent: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
         gpu_info: Option<serde_json::Value>,
     },
     #[serde(rename = "register_ack")]
-    RegisterAck { status: String },
+    RegisterAck {
+        status: String,
+        backend_id: uuid::Uuid,
+        #[serde(default)]
+        config: RegisterAckConfig,
+    },
     #[serde(rename = "ping")]
     Ping { timestamp: String },
     #[serde(rename = "pong")]
@@ -60,6 +59,18 @@ pub enum WsMessage {
     },
 }
 
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RegisterAckConfig {
+    #[serde(default)]
+    pub inference_base_url: Option<String>,
+    #[serde(default)]
+    pub inference_server_type: Option<String>,
+    #[serde(default)]
+    pub max_concurrent: u32,
+    #[serde(default)]
+    pub hostname: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InferenceMessage {
     pub role: String,
@@ -86,7 +97,6 @@ pub async fn run_connection(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let url = url::Url::parse(&config.casper_url)?;
 
-    // Build WS request with auth header
     let request = tungstenite::http::Request::builder()
         .uri(config.casper_url.as_str())
         .header("Authorization", format!("Bearer {}", config.agent_key))
@@ -94,135 +104,88 @@ pub async fn run_connection(
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Version", "13")
-        .header(
-            "Sec-WebSocket-Key",
-            tungstenite::handshake::client::generate_key(),
-        )
+        .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
         .body(())?;
 
-    let (ws_stream, _response) =
-        tokio_tungstenite::connect_async(request).await?;
-
-    tracing::info!("connected to Casper WebSocket");
+    let (ws_stream, _) = tokio_tungstenite::connect_async(request).await?;
+    tracing::info!("connected to Casper");
 
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
-    let backend_id = config.backend_id;
-
-    let hostname = gethostname();
-
-    // Send registration message
+    // Send minimal registration (server already knows our backend_id from the key)
     let register = WsMessage::Register {
-        backend_id,
-        hostname: hostname.clone(),
-        inference_server: config.inference_server.server_type.clone(),
-        inference_version: String::new(),
-        models_loaded: vec![],
-        max_concurrent: config.max_concurrent,
+        hostname: gethostname(),
         gpu_info: None,
     };
+    ws_sink.send(tungstenite::Message::Text(serde_json::to_string(&register)?.into())).await?;
+    tracing::info!("registration sent, waiting for config from server...");
 
-    let register_text = serde_json::to_string(&register)?;
-    ws_sink
-        .send(tungstenite::Message::Text(register_text.into()))
-        .await?;
+    // Wait for RegisterAck with server-pushed config
+    let server_config = wait_for_ack(&mut ws_source).await?;
 
-    tracing::info!("registration message sent");
+    // Resolve inference URL: local override > server config > default
+    let inference_base_url = config.inference_base_url.clone()
+        .or(server_config.inference_base_url.clone())
+        .unwrap_or_else(|| "http://localhost:11434".to_string());
+    let inference_type = server_config.inference_server_type.clone()
+        .unwrap_or_else(|| "openai_compatible".to_string());
+    let max_concurrent = if server_config.max_concurrent > 0 { server_config.max_concurrent } else { 8 };
+
+    tracing::info!(
+        backend_id = %server_config.hostname.as_deref().unwrap_or("?"),
+        inference_url = %inference_base_url,
+        inference_type = %inference_type,
+        max_concurrent = max_concurrent,
+        "configured by server"
+    );
 
     let active_requests = Arc::new(AtomicU32::new(0));
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(
-        config.max_concurrent as usize,
-    ));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent as usize));
 
     // Receive loop
     while let Some(msg) = ws_source.next().await {
-        let msg = match msg {
+        let text = match msg {
             Ok(tungstenite::Message::Text(t)) => t.to_string(),
-            Ok(tungstenite::Message::Close(_)) => {
-                tracing::info!("server closed connection");
-                break;
-            }
+            Ok(tungstenite::Message::Close(_)) => { tracing::info!("server closed connection"); break; }
             Ok(_) => continue,
-            Err(e) => {
-                tracing::error!(error = %e, "WebSocket receive error");
-                return Err(e.into());
-            }
+            Err(e) => { tracing::error!(error = %e, "WebSocket error"); return Err(e.into()); }
         };
 
-        let parsed: WsMessage = match serde_json::from_str(&msg) {
+        let parsed: WsMessage = match serde_json::from_str(&text) {
             Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to parse server message");
-                continue;
-            }
+            Err(e) => { tracing::warn!(error = %e, "failed to parse message"); continue; }
         };
 
         match parsed {
-            WsMessage::RegisterAck { status } => {
-                tracing::info!(status = %status, "registration acknowledged");
-            }
             WsMessage::Ping { timestamp } => {
                 let pong = WsMessage::Pong {
                     timestamp,
                     active_requests: active_requests.load(Ordering::Relaxed),
                     queue_depth: 0,
                 };
-                let pong_text = serde_json::to_string(&pong)?;
-                ws_sink
-                    .send(tungstenite::Message::Text(pong_text.into()))
-                    .await?;
+                ws_sink.send(tungstenite::Message::Text(serde_json::to_string(&pong)?.into())).await?;
             }
-            WsMessage::InferenceRequest {
-                id,
-                model,
-                messages,
-                params,
-                timeout_ms,
-            } => {
+            WsMessage::InferenceRequest { id, model, messages, params, timeout_ms } => {
                 let client = http_client.clone();
-                let base_url = config.inference_server.base_url.clone();
-                let server_type = config.inference_server.server_type.clone();
+                let base_url = inference_base_url.clone();
+                let srv_type = inference_type.clone();
                 let active = Arc::clone(&active_requests);
                 let sem = Arc::clone(&semaphore);
 
-                // We need to send the response back — clone the sink
-                // via a channel approach
                 let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel::<String>(1);
 
                 tokio::spawn(async move {
                     let _permit = sem.acquire().await;
                     active.fetch_add(1, Ordering::Relaxed);
-
                     let start = std::time::Instant::now();
-                    let result = dispatch_local(
-                        &client,
-                        &base_url,
-                        &server_type,
-                        &model,
-                        &messages,
-                        &params,
-                        timeout_ms,
-                    )
-                    .await;
-                    let duration_ms = start.elapsed().as_millis() as u64;
 
+                    let result = dispatch_local(&client, &base_url, &srv_type, &model, &messages, &params, timeout_ms).await;
+                    let duration_ms = start.elapsed().as_millis() as u64;
                     active.fetch_sub(1, Ordering::Relaxed);
 
                     let response_msg = match result {
-                        Ok((msg, usage, stop_reason)) => WsMessage::InferenceResponse {
-                            id,
-                            status: "ok".to_string(),
-                            message: msg,
-                            usage,
-                            duration_ms,
-                            stop_reason,
-                        },
-                        Err(e) => WsMessage::InferenceError {
-                            id,
-                            error: "dispatch_error".to_string(),
-                            message: format!("{e}"),
-                            retryable: true,
-                        },
+                        Ok((msg, usage, stop_reason)) => WsMessage::InferenceResponse { id, status: "ok".to_string(), message: msg, usage, duration_ms, stop_reason },
+                        Err(e) => WsMessage::InferenceError { id, error: "dispatch_error".to_string(), message: format!("{e}"), retryable: true },
                     };
 
                     if let Ok(text) = serde_json::to_string(&response_msg) {
@@ -230,74 +193,55 @@ pub async fn run_connection(
                     }
                 });
 
-                // Forward the response back through the WebSocket
                 if let Some(resp_text) = resp_rx.recv().await {
-                    ws_sink
-                        .send(tungstenite::Message::Text(resp_text.into()))
-                        .await?;
+                    ws_sink.send(tungstenite::Message::Text(resp_text.into())).await?;
                 }
             }
-            _ => {
-                tracing::debug!("ignoring unexpected message from server");
-            }
+            _ => {}
         }
     }
 
     Ok(())
 }
 
-// ── Local dispatch to inference server ────────────────────────────
-
-async fn dispatch_local(
-    client: &reqwest::Client,
-    base_url: &str,
-    server_type: &str,
-    model: &str,
-    messages: &[serde_json::Value],
-    params: &serde_json::Value,
-    timeout_ms: u64,
-) -> Result<(InferenceMessage, InferenceUsage, Option<String>), Box<dyn std::error::Error + Send + Sync>>
-{
-    match server_type {
-        "openai_compatible" | "vllm" | "ollama" | "litellm" => {
-            dispatch_openai_compatible(client, base_url, model, messages, params, timeout_ms).await
+async fn wait_for_ack(
+    ws_source: &mut futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+) -> Result<RegisterAckConfig, Box<dyn std::error::Error>> {
+    let timeout = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while let Some(msg) = ws_source.next().await {
+            if let Ok(tungstenite::Message::Text(text)) = msg {
+                if let Ok(WsMessage::RegisterAck { status, config, .. }) = serde_json::from_str(&text.to_string()) {
+                    if status == "ok" {
+                        return Ok(config);
+                    }
+                    return Err(format!("registration rejected: {status}").into());
+                }
+            }
         }
-        other => Err(format!("unsupported inference server type: {other}").into()),
+        Err("connection closed before register_ack".into())
+    }).await;
+
+    match timeout {
+        Ok(result) => result,
+        Err(_) => Err("timed out waiting for register_ack".into()),
     }
 }
 
-/// Dispatch to an OpenAI-compatible endpoint (vLLM, Ollama, LiteLLM).
-async fn dispatch_openai_compatible(
-    client: &reqwest::Client,
-    base_url: &str,
-    model: &str,
-    messages: &[serde_json::Value],
-    params: &serde_json::Value,
-    timeout_ms: u64,
-) -> Result<(InferenceMessage, InferenceUsage, Option<String>), Box<dyn std::error::Error + Send + Sync>>
-{
+// ── Local dispatch ───────────────────────────────────────────────
+
+async fn dispatch_local(
+    client: &reqwest::Client, base_url: &str, _server_type: &str,
+    model: &str, messages: &[serde_json::Value], params: &serde_json::Value, timeout_ms: u64,
+) -> Result<(InferenceMessage, InferenceUsage, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
 
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "stream": false,
-    });
+    let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": false });
+    if let Some(v) = params.get("max_tokens").and_then(|v| v.as_i64()) { body["max_tokens"] = serde_json::json!(v); }
+    if let Some(v) = params.get("temperature").and_then(|v| v.as_f64()) { body["temperature"] = serde_json::json!(v); }
 
-    // Merge params
-    if let Some(max_tokens) = params.get("max_tokens").and_then(|v| v.as_i64()) {
-        body["max_tokens"] = serde_json::json!(max_tokens);
-    }
-    if let Some(temp) = params.get("temperature").and_then(|v| v.as_f64()) {
-        body["temperature"] = serde_json::json!(temp);
-    }
-
-    let response = client
-        .post(&url)
+    let response = client.post(&url)
         .timeout(std::time::Duration::from_millis(timeout_ms))
-        .json(&body)
-        .send()
-        .await?;
+        .json(&body).send().await?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -306,48 +250,24 @@ async fn dispatch_openai_compatible(
     }
 
     let resp: serde_json::Value = response.json().await?;
+    let choice = resp["choices"].get(0).ok_or("no choices")?;
 
-    // Parse OpenAI-compatible response
-    let choice = resp["choices"]
-        .get(0)
-        .ok_or("no choices in response")?;
-
-    let content = choice["message"]["content"]
-        .as_str()
-        .map(|s| s.to_string());
-    let role = choice["message"]["role"]
-        .as_str()
-        .unwrap_or("assistant")
-        .to_string();
-    let tool_calls = choice["message"]["tool_calls"]
-        .as_array()
-        .map(|arr| arr.clone());
-    let finish_reason = choice["finish_reason"]
-        .as_str()
-        .map(|s| s.to_string());
-
-    let usage_obj = &resp["usage"];
-    let usage = InferenceUsage {
-        input_tokens: usage_obj["prompt_tokens"].as_i64().unwrap_or(0) as i32,
-        output_tokens: usage_obj["completion_tokens"].as_i64().unwrap_or(0) as i32,
-        cache_read_tokens: None,
-        cache_write_tokens: None,
-    };
-
-    let msg = InferenceMessage {
-        role,
-        content,
-        tool_calls,
-    };
-
-    Ok((msg, usage, finish_reason))
+    Ok((
+        InferenceMessage {
+            role: choice["message"]["role"].as_str().unwrap_or("assistant").to_string(),
+            content: choice["message"]["content"].as_str().map(|s| s.to_string()),
+            tool_calls: choice["message"]["tool_calls"].as_array().cloned(),
+        },
+        InferenceUsage {
+            input_tokens: resp["usage"]["prompt_tokens"].as_i64().unwrap_or(0) as i32,
+            output_tokens: resp["usage"]["completion_tokens"].as_i64().unwrap_or(0) as i32,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+        },
+        choice["finish_reason"].as_str().map(|s| s.to_string()),
+    ))
 }
-
-// ── Helpers ───────────────────────────────────────────────────────
 
 fn gethostname() -> String {
-    std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("HOST"))
-        .unwrap_or_else(|_| "unknown".to_string())
+    std::env::var("HOSTNAME").or_else(|_| std::env::var("HOST")).unwrap_or_else(|_| "unknown".to_string())
 }
-

@@ -16,7 +16,7 @@ export default function BackendsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '' })
+  const [form, setForm] = useState({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '', inference_base_url: 'http://localhost:11434', inference_server_type: 'openai_compatible', max_concurrent: 8 })
   const [editId, setEditId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ base_url: '', api_key_enc: '', region: '', priority: 100 })
 
@@ -37,12 +37,21 @@ export default function BackendsPage() {
 
   const create = () => {
     const body: Record<string, unknown> = { name: form.name, provider: form.provider }
-    if (form.base_url) body.base_url = form.base_url
-    if (form.api_key_enc) body.api_key_enc = form.api_key_enc
+    if (form.provider !== 'agent') {
+      if (form.base_url) body.base_url = form.base_url
+      if (form.api_key_enc) body.api_key_enc = form.api_key_enc
+    }
     if (form.region) body.region = form.region
+    if (form.provider === 'agent') {
+      body.extra_config = {
+        inference_base_url: form.inference_base_url,
+        inference_server_type: form.inference_server_type,
+        max_concurrent: form.max_concurrent,
+      }
+    }
     api.post('/api/v1/backends', body).then(() => {
       setShowCreate(false)
-      setForm({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '' })
+      setForm({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '', inference_base_url: 'http://localhost:11434', inference_server_type: 'openai_compatible', max_concurrent: 8 })
       load()
     }).catch(e => setError(e.response?.data?.message || e.message))
   }
@@ -130,7 +139,18 @@ export default function BackendsPage() {
             </div>
           )}
           {form.provider === 'agent' && (
-            <p className="text-xs text-slate-500">Agent backends connect via WebSocket — no Base URL or API key needed. Create agent keys after adding the backend.</p>
+            <div className="space-y-3">
+              <p className="text-xs text-slate-500">Agent backends connect via WebSocket. Configure the inference server details below — the sidecar will receive this config automatically on connect.</p>
+              <div className="grid grid-cols-3 gap-3">
+                <input placeholder="Inference URL (e.g. http://localhost:11434)" value={form.inference_base_url} onChange={e => setForm({...form, inference_base_url: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+                <select value={form.inference_server_type} onChange={e => setForm({...form, inference_server_type: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow">
+                  <option value="openai_compatible">OpenAI-compatible (vLLM, Ollama, LiteLLM)</option>
+                  <option value="tgi">HuggingFace TGI</option>
+                </select>
+                <input type="number" placeholder="Max concurrent" value={form.max_concurrent} onChange={e => setForm({...form, max_concurrent: +e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+              </div>
+              <input placeholder="Region (optional)" value={form.region} onChange={e => setForm({...form, region: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+            </div>
           )}
           <div className="flex gap-2">
             <button onClick={create} className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors">Create Backend</button>

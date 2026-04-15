@@ -57,7 +57,26 @@ pub enum WsMessage {
         retryable: bool,
     },
     #[serde(rename = "register_ack")]
-    RegisterAck { status: String },
+    RegisterAck {
+        status: String,
+        backend_id: uuid::Uuid,
+        #[serde(default)]
+        config: RegisterAckConfig,
+    },
+}
+
+/// Server-side config sent to the sidecar on registration.
+/// Eliminates the need for the sidecar to know anything beyond URL + key.
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct RegisterAckConfig {
+    #[serde(default)]
+    pub inference_base_url: Option<String>,
+    #[serde(default)]
+    pub inference_server_type: Option<String>,
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: u32,
+    #[serde(default)]
+    pub hostname: Option<String>,
 }
 
 fn default_max_concurrent() -> u32 {

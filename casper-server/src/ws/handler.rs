@@ -123,9 +123,30 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
         "agent backend registered"
     );
 
-    // Send register_ack
-    let ack =
-        serde_json::to_string(&WsMessage::RegisterAck { status: "ok".to_string() }).unwrap();
+    // Load backend extra_config to send to the sidecar
+    let extra_config: serde_json::Value = sqlx::query_scalar(
+        "SELECT extra_config FROM platform_backends WHERE id = $1"
+    )
+    .bind(backend_id)
+    .fetch_optional(&state.db_owner)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(serde_json::json!({}));
+
+    let ack_config = super::protocol::RegisterAckConfig {
+        inference_base_url: extra_config.get("inference_base_url").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        inference_server_type: extra_config.get("inference_server_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        max_concurrent: extra_config.get("max_concurrent").and_then(|v| v.as_u64()).unwrap_or(max_concurrent as u64) as u32,
+        hostname: Some(hostname.clone()),
+    };
+
+    // Send register_ack with server-side config
+    let ack = serde_json::to_string(&WsMessage::RegisterAck {
+        status: "ok".to_string(),
+        backend_id,
+        config: ack_config,
+    }).unwrap();
     let _ = send_text(&mut ws_sink, &ack).await;
 
     // Audit connect
