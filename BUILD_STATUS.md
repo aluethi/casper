@@ -119,3 +119,13 @@
 **Dependencies added:** none
 **Notes:** AppState now carries audit, usage, metrics. Metrics endpoint returns Prometheus text format via RuntimeMetrics::render().
 ---
+
+## Task 1I + 1J — JWT and API key auth middleware (unified)
+**Status:** PASSED
+**Completed:** 2026-04-15T08:40:00Z
+**Commit:** pending
+**Summary:** Unified auth middleware: extracts Bearer token, routes to JWT verify or API key lookup (csk- prefix). Builds TenantContext for both paths. ScopeGuard extractor for per-route scope enforcement. SHA-256 hashing for API key lookup.
+**Files changed:** casper-server/src/auth.rs (new), casper-server/src/main.rs, casper-server/Cargo.toml
+**Dependencies added:** sha2, hex, chrono (casper-server)
+**Notes:** Both JWT and API key auth produce the same TenantContext type. API keys default to operator role. ScopeGuard extractor reads TenantContext from request extensions and provides require() method. No const generic RequireScope (Rust doesn't support &str const generics). AuthState holds jwt_verifier, revocation_cache, db pool.
+---
