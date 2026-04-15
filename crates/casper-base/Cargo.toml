@@ -18,3 +18,5 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+rand = { workspace = true }
+ring = "0.17"

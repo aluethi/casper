@@ -59,3 +59,13 @@
 **Dependencies added:** none
 **Notes:** Scope matching rules: exact match, two-part grants three-part, wildcard (*), admin:* grants everything. Three-part scope with specific identifier does NOT grant the two-part version (e.g., agents:triage:run does not grant agents:run).
 ---
+
+## Task 1C — JWT verification
+**Status:** PASSED
+**Completed:** 2026-04-15T08:00:00Z
+**Commit:** pending
+**Summary:** Implemented CasperClaims, JwtVerifier with Ed25519 (via ring/jsonwebtoken), authenticate() building TenantContext, RevocationCheck trait. 32 total tests passing.
+**Files changed:** crates/casper-base/src/jwt.rs (new), crates/casper-base/src/lib.rs, crates/casper-base/Cargo.toml
+**Dependencies added:** ring (dev-dependency for test key generation)
+**Notes:** jsonwebtoken crate uses ring internally. EncodingKey::from_ed_der expects PKCS8 DER for signing. DecodingKey::from_ed_der expects raw 32-byte public key for verification (ring's UnparsedPublicKey). The JwtVerifier stores raw public key bytes. Tests generate keys via ring::signature::Ed25519KeyPair::generate_pkcs8.
+---
