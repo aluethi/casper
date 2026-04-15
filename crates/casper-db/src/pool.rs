@@ -104,8 +104,9 @@ mod tests {
             .await
             .unwrap();
 
-        let tenant_a = TenantId(Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap());
-        let tenant_b = TenantId(Uuid::parse_str("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").unwrap());
+        // Use random UUIDs to avoid collision with application data
+        let tenant_a = TenantId(Uuid::now_v7());
+        let tenant_b = TenantId(Uuid::now_v7());
 
         // Setup: create test tenants and users using the pool owner (bypasses RLS)
         // We use a separate connection for setup that connects as the DB owner
@@ -118,7 +119,13 @@ mod tests {
             .await
             .unwrap();
 
-        // Clean up first
+        // Clean up first (order matters due to FK constraints)
+        sqlx::query("DELETE FROM token_revocations WHERE tenant_id IN ($1, $2)")
+            .bind(tenant_a.0)
+            .bind(tenant_b.0)
+            .execute(&setup_pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM tenant_users WHERE tenant_id IN ($1, $2)")
             .bind(tenant_a.0)
             .bind(tenant_b.0)
@@ -130,12 +137,16 @@ mod tests {
             .bind(tenant_b.0)
             .execute(&setup_pool)
             .await
-            .unwrap();
+            .ok(); // OK to fail if other FKs exist
 
         // Create tenants
-        sqlx::query("INSERT INTO tenants (id, slug, display_name) VALUES ($1, 'test-a', 'Test A'), ($2, 'test-b', 'Test B')")
+        let slug_a = format!("test-a-{}", &tenant_a.0.to_string()[..8]);
+        let slug_b = format!("test-b-{}", &tenant_b.0.to_string()[..8]);
+        sqlx::query("INSERT INTO tenants (id, slug, display_name) VALUES ($1, $3, 'Test A'), ($2, $4, 'Test B')")
             .bind(tenant_a.0)
             .bind(tenant_b.0)
+            .bind(&slug_a)
+            .bind(&slug_b)
             .execute(&setup_pool)
             .await
             .unwrap();
@@ -190,6 +201,6 @@ mod tests {
             .bind(tenant_b.0)
             .execute(&setup_pool)
             .await
-            .unwrap();
+            .ok(); // May fail if other FK refs exist from prior test runs
     }
 }
