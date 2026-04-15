@@ -33,7 +33,7 @@ export default function AgentBuilderPage() {
   const [yaml, setYaml] = useState('')
 
   useEffect(() => {
-    api.get(`/agents/${name}`)
+    api.get(`/api/v1/agents/${name}`)
       .then((r) => {
         const a = r.data
         setAgent(a)
@@ -53,7 +53,7 @@ export default function AgentBuilderPage() {
 
   useEffect(() => {
     if (tab === 'YAML') {
-      api.get(`/agents/${name}/export`).then((r) => setYaml(typeof r.data === 'string' ? r.data : JSON.stringify(r.data, null, 2)))
+      api.get(`/api/v1/agents/${name}/export`).then((r) => setYaml(typeof r.data === 'string' ? r.data : JSON.stringify(r.data, null, 2)))
         .catch(() => setYaml('# Export not available'))
     }
   }, [tab, name])
@@ -65,7 +65,7 @@ export default function AgentBuilderPage() {
       let prompts, tools
       try { prompts = JSON.parse(config.prompts) } catch { prompts = [] }
       try { tools = JSON.parse(config.tools) } catch { tools = [] }
-      await api.put(`/agents/${name}`, {
+      await api.put(`/api/v1/agents/${name}`, {
         display_name: config.display_name,
         description: config.description,
         model_deployment: config.model_deployment,
@@ -86,7 +86,7 @@ export default function AgentBuilderPage() {
     setInput('')
     setSending(true)
     try {
-      const res = await api.post(`/agents/${name}/run`, { message: input, history: messages })
+      const res = await api.post(`/api/v1/agents/${name}/run`, { message: input, history: messages })
       const reply: ChatMessage = {
         role: 'assistant',
         content: res.data.content ?? res.data.message ?? JSON.stringify(res.data),

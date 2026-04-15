@@ -22,7 +22,7 @@ export default function UsersPage() {
 
   const load = () => {
     setLoading(true)
-    api.get('/users')
+    api.get('/api/v1/users')
       .then((r) => setUsers(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -35,7 +35,7 @@ export default function UsersPage() {
     setError('')
     try {
       const scopes = form.scopes.split(',').map((s) => s.trim()).filter(Boolean)
-      await api.post('/users', { email: form.email, role: form.role, scopes })
+      await api.post('/api/v1/users', { email: form.email, role: form.role, scopes })
       setShowForm(false)
       setForm({ email: '', role: 'member', scopes: '' })
       load()
@@ -56,7 +56,7 @@ export default function UsersPage() {
     setError('')
     try {
       const scopes = editForm.scopes.split(',').map((s) => s.trim()).filter(Boolean)
-      await api.patch(`/users/${id}`, { role: editForm.role, scopes })
+      await api.patch(`/api/v1/users/${id}`, { role: editForm.role, scopes })
       setEditing(null)
       load()
     } catch (e: any) {
@@ -69,7 +69,7 @@ export default function UsersPage() {
   const remove = async (id: string) => {
     if (!confirm('Delete this user?')) return
     try {
-      await api.delete(`/users/${id}`)
+      await api.delete(`/api/v1/users/${id}`)
       load()
     } catch (e: any) {
       setError(e.response?.data?.message ?? e.message)

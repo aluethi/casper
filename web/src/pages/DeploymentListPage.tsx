@@ -12,7 +12,7 @@ export default function DeploymentListPage() {
 
   const load = () => {
     setLoading(true)
-    api.get('/deployments')
+    api.get('/api/v1/deployments')
       .then((r) => setDeployments(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -26,7 +26,7 @@ export default function DeploymentListPage() {
     try {
       let params = {}
       try { params = JSON.parse(form.default_params) } catch { /* ignore */ }
-      await api.post('/deployments', { name: form.name, slug: form.slug, model_id: form.model_id, default_params: params })
+      await api.post('/api/v1/deployments', { name: form.name, slug: form.slug, model_id: form.model_id, default_params: params })
       setShowForm(false)
       setForm({ name: '', slug: '', model_id: '', default_params: '{}' })
       load()
@@ -40,7 +40,7 @@ export default function DeploymentListPage() {
   const remove = async (id: string) => {
     if (!confirm('Delete this deployment?')) return
     try {
-      await api.delete(`/deployments/${id}`)
+      await api.delete(`/api/v1/deployments/${id}`)
       load()
     } catch (e: any) {
       setError(e.response?.data?.message ?? e.message)

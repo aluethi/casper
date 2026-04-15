@@ -21,7 +21,7 @@ export default function ConversationListPage() {
   const [loadingMsgs, setLoadingMsgs] = useState(false)
 
   useEffect(() => {
-    api.get('/conversations')
+    api.get('/api/v1/conversations')
       .then((r) => setConversations(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -32,7 +32,7 @@ export default function ConversationListPage() {
     setSelected(id)
     setLoadingMsgs(true)
     try {
-      const res = await api.get(`/conversations/${id}/messages`)
+      const res = await api.get(`/api/v1/conversations/${id}/messages`)
       setMessages(res.data.data ?? res.data)
     } catch {
       setMessages([])
@@ -43,7 +43,7 @@ export default function ConversationListPage() {
 
   const setOutcome = async (id: string, outcome: string) => {
     try {
-      await api.patch(`/conversations/${id}`, { outcome })
+      await api.patch(`/api/v1/conversations/${id}`, { outcome })
       setConversations((c) => c.map((cv) => cv.id === id ? { ...cv, outcome } : cv))
     } catch (e: any) {
       setError(e.response?.data?.message ?? e.message)

@@ -18,7 +18,7 @@ export default function SecretsPage() {
 
   const load = () => {
     setLoading(true)
-    api.get('/secrets')
+    api.get('/api/v1/secrets')
       .then((r) => setSecrets(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -30,7 +30,7 @@ export default function SecretsPage() {
     setSaving(true)
     setError('')
     try {
-      await api.put(`/secrets/${form.key}`, { value: form.value })
+      await api.put(`/api/v1/secrets/${form.key}`, { value: form.value })
       setShowForm(false)
       setForm({ key: '', value: '' })
       load()
@@ -44,7 +44,7 @@ export default function SecretsPage() {
   const remove = async (key: string) => {
     if (!confirm(`Delete secret "${key}"?`)) return
     try {
-      await api.delete(`/secrets/${key}`)
+      await api.delete(`/api/v1/secrets/${key}`)
       load()
     } catch (e: any) {
       setError(e.response?.data?.message ?? e.message)

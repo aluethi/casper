@@ -21,7 +21,7 @@ export default function CatalogPage() {
   const [providerFilter, setProviderFilter] = useState('')
 
   useEffect(() => {
-    api.get('/catalog')
+    api.get('/api/v1/catalog')
       .then((r) => setModels(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))

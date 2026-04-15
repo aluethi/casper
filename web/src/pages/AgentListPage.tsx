@@ -13,7 +13,7 @@ export default function AgentListPage() {
 
   const load = () => {
     setLoading(true)
-    api.get('/agents')
+    api.get('/api/v1/agents')
       .then((r) => setAgents(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -25,7 +25,7 @@ export default function AgentListPage() {
     setSaving(true)
     setError('')
     try {
-      await api.post('/agents', form)
+      await api.post('/api/v1/agents', form)
       setShowForm(false)
       setForm({ name: '', display_name: '', description: '', model_deployment: '' })
       load()

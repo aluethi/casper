@@ -13,7 +13,7 @@ export default function KnowledgePage() {
 
   const load = () => {
     setLoading(true)
-    api.get('/knowledge')
+    api.get('/api/v1/knowledge')
       .then((r) => setDocs(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -29,7 +29,7 @@ export default function KnowledgePage() {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      await api.post('/knowledge', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      await api.post('/api/v1/knowledge', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
       if (fileRef.current) fileRef.current.value = ''
       load()
     } catch (e: any) {
@@ -42,7 +42,7 @@ export default function KnowledgePage() {
   const search = async () => {
     if (!searchQuery.trim()) return
     try {
-      const res = await api.post('/knowledge/search', { query: searchQuery })
+      const res = await api.post('/api/v1/knowledge/search', { query: searchQuery })
       setSearchResults(res.data.results ?? res.data.data ?? res.data)
     } catch (e: any) {
       setError(e.response?.data?.message ?? e.message)
@@ -52,7 +52,7 @@ export default function KnowledgePage() {
   const remove = async (id: string) => {
     if (!confirm('Delete this document?')) return
     try {
-      await api.delete(`/knowledge/${id}`)
+      await api.delete(`/api/v1/knowledge/${id}`)
       load()
     } catch (e: any) {
       setError(e.response?.data?.message ?? e.message)

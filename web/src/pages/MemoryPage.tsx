@@ -22,8 +22,8 @@ export default function MemoryPage() {
 
   useEffect(() => {
     Promise.all([
-      api.get('/agents').then((r) => setAgents(r.data.data ?? r.data)),
-      api.get('/tenant-memory')
+      api.get('/api/v1/agents').then((r) => setAgents(r.data.data ?? r.data)),
+      api.get('/api/v1/tenant-memory')
         .then((r) => { setTenantMemory(r.data); setTenantDraft(r.data.content ?? '') })
         .catch(() => { setTenantMemory({ content: '' }); setTenantDraft('') }),
     ])
@@ -33,7 +33,7 @@ export default function MemoryPage() {
 
   useEffect(() => {
     if (!selectedAgent) { setAgentMemory(null); return }
-    api.get(`/agents/${selectedAgent}/memory`)
+    api.get(`/api/v1/agents/${selectedAgent}/memory`)
       .then((r) => { setAgentMemory(r.data); setAgentDraft(r.data.content ?? '') })
       .catch(() => { setAgentMemory({ content: '' }); setAgentDraft('') })
   }, [selectedAgent])
@@ -42,7 +42,7 @@ export default function MemoryPage() {
     setSaving(true)
     setError('')
     try {
-      await api.put(`/agents/${selectedAgent}/memory`, { content: agentDraft })
+      await api.put(`/api/v1/agents/${selectedAgent}/memory`, { content: agentDraft })
       setAgentMemory((m) => m ? { ...m, content: agentDraft } : { content: agentDraft })
       setEditingAgent(false)
     } catch (e: any) {
@@ -56,7 +56,7 @@ export default function MemoryPage() {
     setSaving(true)
     setError('')
     try {
-      await api.put('/tenant-memory', { content: tenantDraft })
+      await api.put('/api/v1/tenant-memory', { content: tenantDraft })
       setTenantMemory((m) => m ? { ...m, content: tenantDraft } : { content: tenantDraft })
       setEditingTenant(false)
     } catch (e: any) {

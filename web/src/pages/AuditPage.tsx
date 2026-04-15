@@ -18,7 +18,7 @@ export default function AuditPage() {
     if (actorFilter) params.actor = actorFilter
     if (dateFrom) params.from = dateFrom
     if (dateTo) params.to = dateTo
-    api.get('/audit', { params })
+    api.get('/api/v1/audit', { params })
       .then((r) => setEntries(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))

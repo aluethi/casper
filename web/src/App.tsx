@@ -15,6 +15,10 @@ import UsagePage from './pages/UsagePage'
 import AuditPage from './pages/AuditPage'
 import UsersPage from './pages/admin/UsersPage'
 import SecretsPage from './pages/admin/SecretsPage'
+import ModelsPage from './pages/admin/ModelsPage'
+import BackendsPage from './pages/admin/BackendsPage'
+import QuotasPage from './pages/admin/QuotasPage'
+import TenantsPage from './pages/admin/TenantsPage'
 
 export default function App() {
   return (
@@ -41,6 +45,10 @@ export default function App() {
         <Route path="/audit" element={<AuditPage />} />
         <Route path="/admin/users" element={<UsersPage />} />
         <Route path="/admin/secrets" element={<SecretsPage />} />
+        <Route path="/admin/models" element={<ModelsPage />} />
+        <Route path="/admin/backends" element={<BackendsPage />} />
+        <Route path="/admin/quotas" element={<QuotasPage />} />
+        <Route path="/admin/tenants" element={<TenantsPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

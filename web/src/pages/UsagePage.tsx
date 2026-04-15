@@ -8,10 +8,10 @@ export default function UsagePage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    api.get('/usage/events')
+    api.get('/api/v1/usage/events')
       .then((r) => setRecords(r.data.data ?? r.data))
       .catch(() =>
-        api.get('/usage')
+        api.get('/api/v1/usage')
           .then((r) => setRecords(r.data.data ?? r.data))
           .catch((e) => setError(e.response?.data?.message ?? e.message))
       )

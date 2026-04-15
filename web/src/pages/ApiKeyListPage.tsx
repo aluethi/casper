@@ -13,7 +13,7 @@ export default function ApiKeyListPage() {
 
   const load = () => {
     setLoading(true)
-    api.get('/api-keys')
+    api.get('/api/v1/api-keys')
       .then((r) => setKeys(r.data.data ?? r.data))
       .catch((e) => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -26,7 +26,7 @@ export default function ApiKeyListPage() {
     setError('')
     try {
       const scopes = form.scopes.split(',').map((s) => s.trim()).filter(Boolean)
-      const res = await api.post('/api-keys', { name: form.name, scopes })
+      const res = await api.post('/api/v1/api-keys', { name: form.name, scopes })
       setNewKey(res.data.key ?? res.data.raw_key ?? '')
       setForm({ name: '', scopes: '' })
       load()
@@ -40,7 +40,7 @@ export default function ApiKeyListPage() {
   const revoke = async (id: string) => {
     if (!confirm('Revoke this API key?')) return
     try {
-      await api.delete(`/api-keys/${id}`)
+      await api.delete(`/api/v1/api-keys/${id}`)
       load()
     } catch (e: any) {
       setError(e.response?.data?.message ?? e.message)

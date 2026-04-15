@@ -28,6 +28,15 @@ const navSections = [
       { to: '/usage', label: 'Usage' },
     ],
   },
+  {
+    title: 'Platform Admin',
+    links: [
+      { to: '/admin/tenants', label: 'Tenants' },
+      { to: '/admin/models', label: 'Models' },
+      { to: '/admin/backends', label: 'Backends' },
+      { to: '/admin/quotas', label: 'Quotas' },
+    ],
+  },
 ]
 
 export default function Layout() {
