@@ -219,3 +219,13 @@
 **Dependencies added:** dashmap (casper-server, for async task results)
 **Notes:** Run endpoint creates conversations, stores messages, calls AgentEngine.run() with fallback placeholder if LLM unavailable. Async mode uses DashMap<Uuid, Option<Value>> for task results, returns 202 with poll URL. Feedback validates message_id, auto-resolves conversation_id and agent_name. Training export supports JSONL (conversations with messages) and pairs (corrections as chosen/rejected) formats. Agent export returns YAML with Content-Disposition header. Import accepts YAML, upserts with deployment validation. Tasks 5R-5U (delegation wiring, ask_user notification) are structurally complete via sentinels but not integration-tested yet.
 ---
+
+## Tasks 8A-8C, 9A-9B — MCP client, CLI
+**Status:** PASSED
+**Completed:** 2026-04-15T11:30:00Z
+**Commit:** pending
+**Summary:** MCP client with JSON-RPC 2.0 protocol (discover_tools, call_tool). Full CLI with clap — all commands implemented: auth, run, agent, deploy, knowledge, memory, keys, secrets, conversations, usage, audit, snippets. Credentials stored in ~/.casper/credentials.json.
+**Files changed:** crates/casper-mcp/src/client.rs, types.rs (new), casper-cli/src/ (complete rewrite: main.rs, credentials.rs, http.rs, commands/*.rs)
+**Dependencies added:** thiserror (casper-mcp), serde_yaml, dirs (casper-cli), multipart feature on reqwest
+**Notes:** MCP client sends JSON-RPC 2.0 requests to tools/list and tools/call endpoints. CLI commands all make real HTTP calls to the server API. casper-db RLS test fixed to use random UUIDs instead of fixed ones to avoid FK collision with application data. All 97 workspace tests pass.
+---

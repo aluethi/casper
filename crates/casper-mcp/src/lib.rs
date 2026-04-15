@@ -1,2 +1,6 @@
 /// MCP client, tool discovery, elicitation forwarding.
-pub struct McpClient;
+pub mod client;
+pub mod types;
+
+pub use client::McpClient;
+pub use types::{McpError, McpToolDef};
