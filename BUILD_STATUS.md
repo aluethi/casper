@@ -33,9 +33,19 @@
 ## Task 0D — Server shell
 **Status:** PASSED
 **Completed:** 2026-04-15T07:45:00Z
-**Commit:** pending
+**Commit:** 478ce08
 **Summary:** Minimal Axum server with YAML config, PgPool, embedded SQL migrations, /health endpoint, CORS, tracing, graceful shutdown via CTRL+C.
 **Files changed:** casper-server/src/main.rs, casper-server/src/config.rs
 **Dependencies added:** none (all were in workspace from 0A)
 **Notes:** Migration runner uses _migrations tracking table with include_str!() to embed SQL. Config loaded from CASPER_CONFIG env var or default config/casper-server.yaml. The server connects as the casper user. migrations are idempotent (skipped if already applied). Server binds 0.0.0.0:{port}.
+---
+
+## Task 1A — Base types
+**Status:** PASSED
+**Completed:** 2026-04-15T07:50:00Z
+**Commit:** pending
+**Summary:** Implemented TenantId/CorrelationId newtypes, Role enum with PartialOrd/Ord, Subject enum (User/ApiKey), SecretValue (zeroizing), resolve_secret with _FILE convention. 9 unit tests passing.
+**Files changed:** crates/casper-base/src/types.rs, crates/casper-base/src/error.rs
+**Dependencies added:** none
+**Notes:** SecretValue has no Debug/Display/Serialize/Clone as required. Rust 2024 edition requires unsafe blocks for set_var/remove_var in tests. CasperError implements IntoResponse for Axum.
 ---

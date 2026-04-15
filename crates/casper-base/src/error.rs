@@ -80,3 +80,57 @@ impl axum::response::IntoResponse for CasperError {
         (status, body).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_status_codes() {
+        assert_eq!(CasperError::Unauthorized.status_code(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            CasperError::Forbidden("test".into()).status_code(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            CasperError::NotFound("test".into()).status_code(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            CasperError::Conflict("test".into()).status_code(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            CasperError::BadRequest("test".into()).status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(CasperError::RateLimited.status_code(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            CasperError::Internal("test".into()).status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            CasperError::Unavailable("test".into()).status_code(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            CasperError::BadGateway("test".into()).status_code(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            CasperError::GatewayTimeout("test".into()).status_code(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn error_json_format() {
+        let err = CasperError::Forbidden("Token lacks scope agents:triage:run".into());
+        let json = err.to_json();
+        assert_eq!(json["error"], "forbidden");
+        assert_eq!(
+            json["message"],
+            "Insufficient permissions: Token lacks scope agents:triage:run"
+        );
+    }
+}
