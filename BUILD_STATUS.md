@@ -89,3 +89,13 @@
 **Dependencies added:** none
 **Notes:** TenantDb.begin() starts a transaction with SET LOCAL — RLS automatically scoped. Tests use casper user (non-superuser, RLS enforced) for data access and sysadm user (table owner, RLS bypassed) for test setup via peer auth on Unix socket. DATABASE_URL defaults to postgres://casper:casper@localhost:5432/casper.
 ---
+
+## Task 1F — Secret vault
+**Status:** PASSED
+**Completed:** 2026-04-15T08:20:00Z
+**Commit:** pending
+**Summary:** Implemented Vault with HKDF-SHA256 per-tenant key derivation, AES-256-GCM encrypt/decrypt, set/get/delete/list_keys (DB-backed), resolve_mcp_secret, encrypt_value/decrypt_value helpers. 4 tests passing.
+**Files changed:** crates/casper-vault/src/vault.rs (new), crates/casper-vault/src/lib.rs, crates/casper-vault/Cargo.toml
+**Dependencies added:** none
+**Notes:** Vault.encrypt_value/decrypt_value store nonce:ciphertext in a single string (for SSO client_secret_enc, platform_backends.api_key_enc). Vault.set/get use separate DB columns (tenant_secrets table). resolve_mcp_secret parses "secret:key_name" format. Per-tenant key isolation verified in tests.
+---
