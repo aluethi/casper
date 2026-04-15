@@ -125,9 +125,17 @@ export default function Layout() {
           <div />
           <div className="flex items-center gap-4">
             {user && (
-              <span className="text-xs text-slate-400">
-                {user.tenant_id}
-              </span>
+              <>
+                <span className="text-sm text-slate-600">{user.subject}</span>
+                <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">{user.role}</span>
+                <span className="text-xs text-slate-400">{user.tenant_id}</span>
+                <button
+                  onClick={() => logout()}
+                  className="text-sm text-slate-500 hover:text-slate-900 transition-colors"
+                >
+                  Logout
+                </button>
+              </>
             )}
           </div>
         </header>
