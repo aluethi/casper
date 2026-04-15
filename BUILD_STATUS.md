@@ -49,3 +49,13 @@
 **Dependencies added:** none
 **Notes:** SecretValue has no Debug/Display/Serialize/Clone as required. Rust 2024 edition requires unsafe blocks for set_var/remove_var in tests. CasperError implements IntoResponse for Axum.
 ---
+
+## Task 1B — Three-part scope matching
+**Status:** PASSED
+**Completed:** 2026-04-15T07:55:00Z
+**Commit:** pending
+**Summary:** Implemented Scope struct with parse/grants/Display/Serialize/Deserialize, TenantContext with require_scope/require_role, has_scope helper. 27 total unit tests passing.
+**Files changed:** crates/casper-base/src/scope.rs (new), crates/casper-base/src/context.rs (new), crates/casper-base/src/lib.rs
+**Dependencies added:** none
+**Notes:** Scope matching rules: exact match, two-part grants three-part, wildcard (*), admin:* grants everything. Three-part scope with specific identifier does NOT grant the two-part version (e.g., agents:triage:run does not grant agents:run).
+---
