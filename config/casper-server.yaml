@@ -1,32 +1,75 @@
+# ═══════════════════════════════════════════════════════════════════
+# Casper Server Configuration
+# ═══════════════════════════════════════════════════════════════════
+# Loaded from $CASPER_CONFIG or defaults to config/casper-server.yaml
+# All durations are in seconds unless noted otherwise.
+
+# ── HTTP Listener ─────────────────────────────────────────────────
 listen:
+  # Port to bind on (0.0.0.0:<port>)
   port: 3000
-  cors_origins: ["http://localhost:5173"]
 
+  # Allowed CORS origins. Empty list = allow all origins (Any).
+  cors_origins:
+    - "http://localhost:5173"       # Vite dev server
+
+# ── Database ──────────────────────────────────────────────────────
 database:
+  # Primary connection URL (used by RLS-scoped queries)
   url: postgres://casper:casper@localhost:5432/casper
-  owner_url: "postgres:///casper?host=/var/run/postgresql&user=sysadm"
-  main_pool_size: 30
-  analytics_pool_size: 10
 
+  # Owner connection URL — bypasses RLS for auth lookups, migrations,
+  # and platform admin operations. Falls back to `url` if not set.
+  owner_url: "postgres:///casper?host=/var/run/postgresql&user=sysadm"
+
+  # Connection pool sizes
+  main_pool_size: 30                # General request handling
+  analytics_pool_size: 10           # Usage/audit queries (separate pool)
+
+# ── Authentication ────────────────────────────────────────────────
 auth:
+  # Path to Ed25519 PKCS#8 DER signing key (production).
+  # Not needed when dev_auth is true — ephemeral keys are generated.
   signing_key_file: /run/secrets/casper_signing_key
+
+  # Path to AES-256 master key for secret vault encryption.
+  # 32 bytes of raw key material.
   master_key_file: /run/secrets/casper_master_key
+
+  # Enable dev-mode authentication:
+  #   - Ephemeral Ed25519 keys (no key files needed)
+  #   - POST /auth/dev-login accepts any email without SSO
+  # NEVER enable in production.
   dev_auth: true
+
+  # Email address for the bootstrapped platform admin user.
   admin_email: admin@ventoo.ch
 
+# ── Web Search (SearXNG) ─────────────────────────────────────────
+# Used by the built-in web_search agent tool.
 web_search:
   base_url: https://search.ventoo.ai
   format: json
   max_results: 10
 
+# ── Web Fetch ─────────────────────────────────────────────────────
+# Used by the built-in web_fetch agent tool.
 web_fetch:
   timeout_secs: 30
-  max_response_bytes: 1048576
+  max_response_bytes: 1048576       # 1 MB
 
+# ── Knowledge Base (RAG) ─────────────────────────────────────────
 knowledge:
+  # Directory for uploaded knowledge documents
   storage_path: ./data/knowledge
+
+  # Deployment slug for embedding model (must exist in catalog)
   embedding_deployment: embeddings-default
 
+# ── Agent Actor System ────────────────────────────────────────────
 actors:
+  # How long an idle actor stays in memory before the reaper removes it
   idle_timeout_secs: 300
+
+  # Maximum concurrent running agents per tenant
   max_concurrent_per_tenant: 50

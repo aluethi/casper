@@ -229,3 +229,13 @@
 **Dependencies added:** thiserror (casper-mcp), serde_yaml, dirs (casper-cli), multipart feature on reqwest
 **Notes:** MCP client sends JSON-RPC 2.0 requests to tools/list and tools/call endpoints. CLI commands all make real HTTP calls to the server API. casper-db RLS test fixed to use random UUIDs instead of fixed ones to avoid FK collision with application data. All 97 workspace tests pass.
 ---
+
+## Tasks 11D-11E — Docker, CI, documentation
+**Status:** PASSED
+**Completed:** 2026-04-15T12:00:00Z
+**Commit:** pending
+**Summary:** Multi-stage Dockerfile (builder + slim runtime). docker-compose.yml (pg16+pgvector, casper-server, searxng). docker-compose.test.yml (adds wiremock). GitHub Actions CI (format, build, clippy, test with PG service). README.md with quick start. ARCHITECTURE.md with crate graph and flow diagrams.
+**Files changed:** Dockerfile, docker-compose.yml, docker-compose.test.yml, .env.example, .github/workflows/ci.yml, README.md, ARCHITECTURE.md, config/casper-server.yaml (documented), config/casper-server.docker.yaml (new)
+**Dependencies added:** none
+**Notes:** Dockerfile uses stub-source trick for dependency caching. Runtime runs as non-root casper user with healthcheck. CI has two jobs: check (lint+test) and docker (image build). README covers both Docker and local dev setup. Config YAML fully documented with inline comments.
+---

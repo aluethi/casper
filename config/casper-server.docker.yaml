@@ -1,0 +1,34 @@
+# Casper Server — Docker Compose configuration
+# Used when running via docker compose (mounted as /etc/casper/casper-server.yaml)
+
+listen:
+  port: 3000
+  cors_origins:
+    - "http://localhost:5173"   # Vite dev server
+    - "http://localhost:3000"
+
+database:
+  url: postgres://casper:casper@db:5432/casper
+  main_pool_size: 20
+  analytics_pool_size: 5
+
+auth:
+  dev_auth: true
+  admin_email: admin@ventoo.ch
+
+web_search:
+  base_url: http://searxng:8080
+  format: json
+  max_results: 10
+
+web_fetch:
+  timeout_secs: 30
+  max_response_bytes: 1048576
+
+knowledge:
+  storage_path: /var/lib/casper/knowledge
+  embedding_deployment: embeddings-default
+
+actors:
+  idle_timeout_secs: 300
+  max_concurrent_per_tenant: 50

@@ -1,0 +1,33 @@
+# Casper Platform — Test Environment (extends docker-compose.yml)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+#
+# Adds wiremock for LLM backend mocking, used by integration and Playwright tests.
+
+services:
+  # ── WireMock (LLM backend mock) ────────────────────────────────
+  wiremock:
+    image: wiremock/wiremock:3.9.1
+    ports:
+      - "9090:8080"
+    volumes:
+      - ./tests/wiremock:/home/wiremock:ro
+    command: ["--verbose"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/__admin/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Override casper-server to use wiremock as LLM backend ──────
+  app:
+    depends_on:
+      db:
+        condition: service_healthy
+      wiremock:
+        condition: service_healthy
+    environment:
+      CASPER_CONFIG: /etc/casper/casper-server.yaml
+      RUST_LOG: debug,sqlx=warn
+      CASPER_TEST_MODE: "1"
