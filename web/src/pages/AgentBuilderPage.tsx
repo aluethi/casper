@@ -197,6 +197,7 @@ export default function AgentBuilderPage() {
   const [showAddBlock, setShowAddBlock] = useState(false)
   const [expandedBlock, setExpandedBlock] = useState<number | null>(null)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [editingLabel, setEditingLabel] = useState<number | null>(null)
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -387,7 +388,26 @@ export default function AgentBuilderPage() {
                         </span>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-slate-900">{block.label || meta?.label}</span>
+                            {editingLabel === i ? (
+                              <input
+                                autoFocus
+                                value={block.label}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => { const next = [...blocks]; next[i] = { ...block, label: e.target.value }; setBlocks(next) }}
+                                onBlur={() => setEditingLabel(null)}
+                                onKeyDown={e => { if (e.key === 'Enter') setEditingLabel(null) }}
+                                className="rounded ring-1 ring-blue-300 px-1.5 py-0.5 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 w-48" />
+                            ) : (
+                              <>
+                                <span className="text-sm font-medium text-slate-900">{block.label || meta?.label}</span>
+                                <button onClick={e => { e.stopPropagation(); setEditingLabel(i) }}
+                                  className="text-slate-300 hover:text-slate-500 transition-colors" title="Rename">
+                                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+                                  </svg>
+                                </button>
+                              </>
+                            )}
                             <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium bg-${meta?.color || 'slate'}-50 text-${meta?.color || 'slate'}-600`}>{block.type}</span>
                           </div>
                         </div>
@@ -397,11 +417,6 @@ export default function AgentBuilderPage() {
                       {/* Block editor (expanded) */}
                       {isExpanded && (
                         <div className="px-4 pb-4 border-t border-slate-100 pt-3">
-                          <div className="mb-3">
-                            <label className="block text-xs font-medium text-slate-500 mb-1">Label</label>
-                            <input value={block.label} onChange={e => { const next = [...blocks]; next[i] = { ...block, label: e.target.value }; setBlocks(next) }}
-                              className="rounded-lg ring-1 ring-slate-300 px-2 py-1 text-sm w-full" />
-                          </div>
                           <BlockEditor block={block} onChange={b => { const next = [...blocks]; next[i] = b; setBlocks(next) }} />
                         </div>
                       )}
