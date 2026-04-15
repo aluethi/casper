@@ -149,3 +149,13 @@
 **Dependencies added:** time (casper-server)
 **Notes:** All tenant routes use db_owner pool (bypasses RLS). Uses time::OffsetDateTime for DB columns, converts to RFC3339 strings in JSON responses. TenantRow type alias simplifies query_as usage. Tenant creation also initializes empty tenant_memory row and creates owner user with admin:* scope.
 ---
+
+## Tasks 2B-2G — Tenant management routes
+**Status:** PASSED
+**Completed:** 2026-04-15T09:00:00Z
+**Commit:** pending
+**Summary:** Implemented SSO CRUD (2B), email domains (2C), user management (2E), API keys with SHA-256 hashing (2F), secrets vault (2G). OIDC flow (2D) deferred to when MCP/OIDC client is built. All routes verified end-to-end.
+**Files changed:** casper-server/src/routes/sso_routes.rs, domain_routes.rs, user_routes.rs, apikey_routes.rs, secret_routes.rs (all new), mod.rs, main.rs, Cargo.toml
+**Dependencies added:** base64 (casper-server)
+**Notes:** API keys use csk-{UUIDv7} format with SHA-256 hash stored. Plaintext key returned only on creation. Users and API keys derive tenant_id from TenantContext (authenticated user), not from request body. Secrets stored with placeholder encryption (base64 value, nonce="none") — will be wired to Vault later. SSO client_secret stored as-is — vault encryption deferred. OIDC flow (Task 2D) not implemented yet — needs OIDC client library.
+---

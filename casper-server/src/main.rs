@@ -223,6 +223,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let authenticated = Router::new()
         .route("/auth/status", get(routes::auth_routes::auth_status))
         .merge(routes::tenant_routes::tenant_router())
+        .merge(routes::sso_routes::sso_router())
+        .merge(routes::domain_routes::domain_router())
+        .merge(routes::user_routes::user_router())
+        .merge(routes::apikey_routes::apikey_router())
+        .merge(routes::secret_routes::secret_router())
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             auth::auth_middleware,
