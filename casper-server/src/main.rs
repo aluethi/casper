@@ -35,6 +35,7 @@ pub struct AppState {
     pub jwt_signer: Option<Arc<JwtSigner>>,
     pub jwt_verifier: Option<Arc<JwtVerifier>>,
     pub revocation_cache: RevocationCache,
+    pub vault: Arc<casper_vault::Vault>,
     pub http_client: reqwest::Client,
     pub async_tasks: Arc<DashMap<Uuid, Option<serde_json::Value>>>,
     pub agent_registry: Arc<ws::AgentBackendRegistry>,
@@ -194,6 +195,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup revocation cache
     let revocation_cache = RevocationCache::new();
 
+    // Setup secret vault (AES-256-GCM with HKDF per-tenant key derivation)
+    let vault = {
+        let master_key = if config.auth.dev_auth {
+            // Dev mode: deterministic key (NOT secure — for development only)
+            tracing::warn!("Dev mode: using insecure deterministic vault master key");
+            b"casper-dev-master-key-not-secure!".to_vec()
+        } else if let Some(ref path) = config.auth.master_key_file {
+            std::fs::read(path).unwrap_or_else(|e| panic!("failed to read master key from {path}: {e}"))
+        } else {
+            tracing::warn!("No master key configured — vault encryption disabled, using dev key");
+            b"casper-dev-master-key-not-secure!".to_vec()
+        };
+        Arc::new(casper_vault::Vault::new(master_key))
+    };
+
     let cors = if config.listen.cors_origins.is_empty() {
         CorsLayer::new().allow_origin(Any)
     } else {
@@ -224,6 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit,
         usage,
         metrics,
+        vault,
         jwt_signer,
         jwt_verifier: jwt_verifier.clone(),
         revocation_cache: revocation_cache.clone(),

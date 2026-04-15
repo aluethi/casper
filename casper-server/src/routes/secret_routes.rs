@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     routing::post,
 };
-use casper_base::CasperError;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -40,7 +40,7 @@ fn row_to_response(r: SecretKeyRow) -> SecretKeyResponse {
     }
 }
 
-/// POST /api/v1/secrets — Set (upsert) a secret.
+/// POST /api/v1/secrets — Set (upsert) a secret with AES-256-GCM encryption.
 async fn set_secret(
     State(state): State<AppState>,
     guard: ScopeGuard,
@@ -48,26 +48,17 @@ async fn set_secret(
 ) -> Result<Json<SecretKeyResponse>, CasperError> {
     guard.require("secrets:write")?;
 
-    let tenant_id = guard.0.tenant_id.0;
-    let id = Uuid::now_v7();
+    let tenant_id = TenantId(guard.0.tenant_id.0);
 
-    // Store plaintext as placeholder; proper Vault encryption will be wired later.
-    // Using base64-encoded value as ciphertext_b64, "none" as nonce_b64.
-    use base64::Engine;
-    let ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(body.value.as_bytes());
+    // Encrypt via Vault (HKDF per-tenant key derivation + AES-256-GCM)
+    state.vault.set(&state.db_owner, tenant_id, &body.key, body.value.as_bytes()).await?;
 
+    // Fetch the row back for timestamps
     let row: SecretKeyRow = sqlx::query_as(
-        "INSERT INTO tenant_secrets (id, tenant_id, key, ciphertext_b64, nonce_b64)
-         VALUES ($1, $2, $3, $4, 'none')
-         ON CONFLICT (tenant_id, key) DO UPDATE SET
-            ciphertext_b64 = EXCLUDED.ciphertext_b64,
-            updated_at = now()
-         RETURNING key, created_at, updated_at"
+        "SELECT key, created_at, updated_at FROM tenant_secrets WHERE tenant_id = $1 AND key = $2"
     )
-    .bind(id)
-    .bind(tenant_id)
+    .bind(tenant_id.0)
     .bind(&body.key)
-    .bind(&ciphertext_b64)
     .fetch_one(&state.db_owner)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
@@ -106,16 +97,10 @@ async fn delete_secret(
 ) -> Result<Json<serde_json::Value>, CasperError> {
     guard.require("secrets:write")?;
 
-    let tenant_id = guard.0.tenant_id.0;
+    let tenant_id = TenantId(guard.0.tenant_id.0);
+    let deleted = state.vault.delete(&state.db_owner, tenant_id, &key).await?;
 
-    let result = sqlx::query("DELETE FROM tenant_secrets WHERE tenant_id = $1 AND key = $2")
-        .bind(tenant_id)
-        .bind(&key)
-        .execute(&state.db_owner)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    if result.rows_affected() == 0 {
+    if !deleted {
         return Err(CasperError::NotFound(format!("secret '{key}'")));
     }
 
