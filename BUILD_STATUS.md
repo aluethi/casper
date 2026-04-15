@@ -79,3 +79,13 @@
 **Dependencies added:** tokio-util (workspace)
 **Notes:** Access tokens 15 min, refresh tokens 7 days. RevocationCache uses CancellationToken for graceful shutdown. Background refresh from token_revocations table. sign_verify_with_revocation test proves full chain: sign → verify → revoke → reject.
 ---
+
+## Task 1E — Database layer
+**Status:** PASSED
+**Completed:** 2026-04-15T08:15:00Z
+**Commit:** pending
+**Summary:** Implemented DatabasePools (main + analytics), TenantDb with SET LOCAL app.tenant_id in begin() and acquire(). RLS isolation verified with real database test.
+**Files changed:** crates/casper-db/src/pool.rs, crates/casper-db/src/lib.rs
+**Dependencies added:** none
+**Notes:** TenantDb.begin() starts a transaction with SET LOCAL — RLS automatically scoped. Tests use casper user (non-superuser, RLS enforced) for data access and sysadm user (table owner, RLS bypassed) for test setup via peer auth on Unix socket. DATABASE_URL defaults to postgres://casper:casper@localhost:5432/casper.
+---
