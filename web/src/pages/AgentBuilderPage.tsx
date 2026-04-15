@@ -46,8 +46,10 @@ function createBlock(type: string): PromptBlock {
 
 const ENV_FIELDS = ['datetime', 'tenant_name', 'tenant_slug', 'agent_name', 'agent_display_name', 'invocation_source']
 
+interface AvailableAgent { name: string; display_name: string; description: string | null }
+
 // ── Per-type block editors ───────────────────────────────────────
-function BlockEditor({ block, onChange }: { block: PromptBlock; onChange: (b: PromptBlock) => void }) {
+function BlockEditor({ block, onChange, availableAgents }: { block: PromptBlock; onChange: (b: PromptBlock) => void; availableAgents: AvailableAgent[] }) {
   switch (block.type) {
     case 'text':
       return (
@@ -89,29 +91,52 @@ function BlockEditor({ block, onChange }: { block: PromptBlock; onChange: (b: Pr
           <div className="flex justify-between text-xs text-slate-400"><span>100</span><span>10,000</span></div>
         </div>
       )
-    case 'delegates':
+    case 'delegates': {
+      const addedNames = new Set(block.agents.map(a => a.name))
+      const remaining = availableAgents.filter(a => !addedNames.has(a.name))
       return (
         <div className="space-y-2">
           <label className="block text-xs font-medium text-slate-500 mb-1">Sub-agents</label>
           {block.agents.map((a, i) => (
-            <div key={i} className="flex gap-2 items-start">
-              <input placeholder="Agent name" value={a.name} onChange={e => {
-                const agents = [...block.agents]; agents[i] = { ...a, name: e.target.value }; onChange({ ...block, agents })
-              }} className="rounded-lg ring-1 ring-slate-300 px-2 py-1 text-sm flex-1" />
-              <input placeholder="Description" value={a.description} onChange={e => {
-                const agents = [...block.agents]; agents[i] = { ...a, description: e.target.value }; onChange({ ...block, agents })
-              }} className="rounded-lg ring-1 ring-slate-300 px-2 py-1 text-sm flex-1" />
-              <input placeholder="When to use" value={a.when} onChange={e => {
-                const agents = [...block.agents]; agents[i] = { ...a, when: e.target.value }; onChange({ ...block, agents })
-              }} className="rounded-lg ring-1 ring-slate-300 px-2 py-1 text-sm flex-1" />
-              <button onClick={() => { const agents = block.agents.filter((_, j) => j !== i); onChange({ ...block, agents }) }}
-                className="text-red-500 hover:text-red-400 text-sm px-1">x</button>
+            <div key={i} className="rounded-lg ring-1 ring-slate-200 bg-slate-50/50 px-3 py-2.5">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm font-medium text-slate-900">{a.name}</span>
+                <button onClick={() => { const agents = block.agents.filter((_, j) => j !== i); onChange({ ...block, agents }) }}
+                  className="text-slate-300 hover:text-red-500 transition-colors text-sm">x</button>
+              </div>
+              <p className="text-xs text-slate-500 mb-1.5">{a.description || 'No description'}</p>
+              <div>
+                <label className="block text-[10px] font-medium text-slate-400 uppercase tracking-wide mb-0.5">When to delegate</label>
+                <input placeholder="e.g. Build failures or pipeline issues" value={a.when} onChange={e => {
+                  const agents = [...block.agents]; agents[i] = { ...a, when: e.target.value }; onChange({ ...block, agents })
+                }} className="w-full rounded ring-1 ring-slate-300 px-2 py-1 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none" />
+              </div>
             </div>
           ))}
-          <button onClick={() => onChange({ ...block, agents: [...block.agents, { name: '', description: '', when: '' }] })}
-            className="text-blue-600 hover:text-blue-500 text-xs font-medium">+ Add agent</button>
+          {remaining.length > 0 ? (
+            <div className="relative">
+              <select
+                value=""
+                onChange={e => {
+                  const selected = availableAgents.find(a => a.name === e.target.value)
+                  if (selected) {
+                    onChange({ ...block, agents: [...block.agents, { name: selected.name, description: selected.description || selected.display_name, when: '' }] })
+                  }
+                }}
+                className="w-full rounded-lg ring-1 ring-slate-300 px-2 py-1.5 text-sm text-blue-600 font-medium bg-white hover:bg-slate-50 cursor-pointer focus:ring-2 focus:ring-blue-600 focus:outline-none"
+              >
+                <option value="">+ Add agent...</option>
+                {remaining.map(a => (
+                  <option key={a.name} value={a.name}>{a.display_name || a.name} — {a.description || 'No description'}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400 italic">All available agents have been added.</p>
+          )}
         </div>
       )
+    }
     case 'datasource':
       return (
         <div className="space-y-2">
@@ -199,6 +224,9 @@ export default function AgentBuilderPage() {
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [editingLabel, setEditingLabel] = useState<number | null>(null)
 
+  // Available agents (for delegates block)
+  const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([])
+
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
@@ -233,6 +261,11 @@ export default function AgentBuilderPage() {
       })
       .catch(e => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
+    // Fetch all agents for delegate picker (exclude current agent)
+    api.get('/api/v1/agents').then(r => {
+      const list = (r.data.data || r.data || []) as AvailableAgent[]
+      setAvailableAgents(list.filter(a => a.name !== name))
+    }).catch(() => {})
   }, [name])
 
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
@@ -417,7 +450,7 @@ export default function AgentBuilderPage() {
                       {/* Block editor (expanded) */}
                       {isExpanded && (
                         <div className="px-4 pb-4 border-t border-slate-100 pt-3">
-                          <BlockEditor block={block} onChange={b => { const next = [...blocks]; next[i] = b; setBlocks(next) }} />
+                          <BlockEditor block={block} onChange={b => { const next = [...blocks]; next[i] = b; setBlocks(next) }} availableAgents={availableAgents} />
                         </div>
                       )}
                     </div>
