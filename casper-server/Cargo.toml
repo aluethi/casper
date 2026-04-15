@@ -15,7 +15,6 @@ casper-vault = { workspace = true }
 casper-observe = { workspace = true }
 casper-catalog = { workspace = true }
 casper-proxy = { workspace = true }
-casper-knowledge = { workspace = true }
 casper-mcp = { workspace = true }
 casper-agent = { workspace = true }
 axum = { workspace = true }

@@ -8,7 +8,6 @@ members = [
     "crates/casper-observe",
     "crates/casper-catalog",
     "crates/casper-proxy",
-    "crates/casper-knowledge",
     "crates/casper-mcp",
     "crates/casper-agent",
     "casper-server",
@@ -97,6 +96,5 @@ casper-vault = { path = "crates/casper-vault" }
 casper-observe = { path = "crates/casper-observe" }
 casper-catalog = { path = "crates/casper-catalog" }
 casper-proxy = { path = "crates/casper-proxy" }
-casper-knowledge = { path = "crates/casper-knowledge" }
 casper-mcp = { path = "crates/casper-mcp" }
 casper-agent = { path = "crates/casper-agent" }
