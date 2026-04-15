@@ -484,6 +484,7 @@ dependencies = [
  "casper-proxy",
  "casper-vault",
  "chrono",
+ "dashmap",
  "hex",
  "reqwest",
  "ring",

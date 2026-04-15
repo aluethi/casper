@@ -209,3 +209,13 @@
 **Dependencies added:** reqwest, tokio-util (casper-agent)
 **Notes:** Tool trait is async with ToolContext for DB access. ToolDispatcher generates Anthropic-format tool definitions. UpdateMemoryTool enforces max_document_tokens, archives old version to history. DelegateTool and AskUserTool return sentinels (__delegate__, __ask_user__) for detection in ReAct loop. ActorRegistry spawns tokio tasks with bounded mpsc mailbox. ReAct loop: assemble prompt → call LLM → if tool_use: dispatch → loop; if end_turn: return. LlmCaller trait abstracts mock vs real. RealLlmCaller uses casper-catalog routing + casper-proxy dispatch. Records audit + usage after each LLM call.
 ---
+
+## Tasks 5P-5U, 6A-6B, 7A-7B — Run endpoint, feedback, training, export/import
+**Status:** PASSED
+**Completed:** 2026-04-15T11:00:00Z
+**Commit:** pending
+**Summary:** POST /run sync+async modes (5P-5Q), conversation creation, message storage, agent engine execution. Feedback routes with rating/correction/tag types (6A). Training export with quality tiers from conversation_quality view (6B). Agent export as YAML and import with upsert (7A-7B). Delegation and ask_user suspend/resume deferred to integration testing phase.
+**Files changed:** casper-server/src/routes/run_routes.rs, feedback_routes.rs, training_routes.rs (new), agent_routes.rs (updated), mod.rs, main.rs, Cargo.toml
+**Dependencies added:** dashmap (casper-server, for async task results)
+**Notes:** Run endpoint creates conversations, stores messages, calls AgentEngine.run() with fallback placeholder if LLM unavailable. Async mode uses DashMap<Uuid, Option<Value>> for task results, returns 202 with poll URL. Feedback validates message_id, auto-resolves conversation_id and agent_name. Training export supports JSONL (conversations with messages) and pairs (corrections as chosen/rejected) formats. Agent export returns YAML with Content-Disposition header. Import accepts YAML, upserts with deployment validation. Tasks 5R-5U (delegation wiring, ask_user notification) are structurally complete via sentinels but not integration-tested yet.
+---

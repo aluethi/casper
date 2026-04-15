@@ -7,12 +7,14 @@ use axum::{Json, Router, extract::State, middleware, routing::get};
 use casper_auth::{JwtSigner, RevocationCache};
 use casper_base::JwtVerifier;
 use casper_observe::{AuditWriter, RuntimeMetrics, UsageRecorder};
+use dashmap::DashMap;
 use serde_json::json;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use uuid::Uuid;
 
 use auth::AuthState;
 use config::ServerConfig;
@@ -31,6 +33,7 @@ pub struct AppState {
     pub jwt_verifier: Option<Arc<JwtVerifier>>,
     pub revocation_cache: RevocationCache,
     pub http_client: reqwest::Client,
+    pub async_tasks: Arc<DashMap<Uuid, Option<serde_json::Value>>>,
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -215,6 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         jwt_verifier: jwt_verifier.clone(),
         revocation_cache: revocation_cache.clone(),
         http_client,
+        async_tasks: Arc::new(DashMap::new()),
     };
 
     // Auth middleware state
@@ -247,6 +251,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::snippet_routes::snippet_router())
         .merge(routes::agent_routes::agent_router())
         .merge(routes::conversation_routes::conversation_router())
+        .merge(routes::run_routes::run_router())
+        .merge(routes::feedback_routes::feedback_router())
+        .merge(routes::training_routes::training_router())
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             auth::auth_middleware,

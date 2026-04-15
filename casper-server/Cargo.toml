@@ -38,6 +38,7 @@ ring = "0.17"
 time = { workspace = true }
 bigdecimal = "0.4"
 reqwest = { workspace = true }
+dashmap = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
