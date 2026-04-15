@@ -33,56 +33,56 @@ export default function AuditPage() {
     (!actionFilter || e.action === actionFilter) && (!actorFilter || e.actor === actorFilter)
   )
 
-  if (loading) return <p className="text-gray-500">Loading...</p>
+  if (loading) return <p className="text-slate-500">Loading...</p>
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-4">Audit Log</h1>
-      {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4">{error}</div>}
+      <h1 className="font-display text-3xl tracking-tight text-slate-900 mb-4">Audit Log</h1>
+      {error && <div className="bg-red-50 text-red-700 p-3 rounded-xl ring-1 ring-red-200 text-sm mb-4">{error}</div>}
 
       <div className="flex flex-wrap gap-3 mb-4">
         <select value={actionFilter} onChange={(e) => setActionFilter(e.target.value)}
-          className="border border-gray-300 rounded px-3 py-2 text-sm">
+          className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow">
           <option value="">All Actions</option>
           {actions.map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
         <select value={actorFilter} onChange={(e) => setActorFilter(e.target.value)}
-          className="border border-gray-300 rounded px-3 py-2 text-sm">
+          className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow">
           <option value="">All Actors</option>
           {actors.map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
         <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-          className="border border-gray-300 rounded px-3 py-2 text-sm" placeholder="From" />
+          className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" placeholder="From" />
         <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-          className="border border-gray-300 rounded px-3 py-2 text-sm" placeholder="To" />
-        <button onClick={load} className="bg-gray-100 text-gray-700 px-4 py-2 rounded text-sm hover:bg-gray-200">
+          className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" placeholder="To" />
+        <button onClick={load} className="rounded-full text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 px-4 py-2 transition-colors">
           Apply
         </button>
       </div>
 
       {filtered.length === 0 ? (
-        <p className="text-gray-500">No audit entries found.</p>
+        <p className="text-slate-500">No audit entries found.</p>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-gray-600">
+            <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
                 <th className="px-4 py-3">Timestamp</th><th className="px-4 py-3">Actor</th>
                 <th className="px-4 py-3">Action</th><th className="px-4 py-3">Resource</th>
                 <th className="px-4 py-3">Resource ID</th><th className="px-4 py-3">Detail</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-slate-100">
               {filtered.map((e) => (
-                <tr key={e.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
-                  <td className="px-4 py-3 text-gray-700">{e.actor}</td>
+                <tr key={e.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-slate-700">{e.actor}</td>
                   <td className="px-4 py-3">
-                    <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded">{e.action}</span>
+                    <span className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-slate-50 text-slate-700 ring-1 ring-slate-600/20">{e.action}</span>
                   </td>
-                  <td className="px-4 py-3 text-gray-500">{e.resource_type}</td>
-                  <td className="px-4 py-3 text-gray-500 font-mono text-xs">{e.resource_id}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs max-w-xs truncate">
+                  <td className="px-4 py-3 text-slate-500">{e.resource_type}</td>
+                  <td className="px-4 py-3 text-slate-500 font-mono text-xs">{e.resource_id}</td>
+                  <td className="px-4 py-3 text-slate-400 text-xs max-w-xs truncate">
                     {Object.keys(e.detail).length > 0 ? JSON.stringify(e.detail) : '--'}
                   </td>
                 </tr>

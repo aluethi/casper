@@ -51,54 +51,54 @@ export default function SecretsPage() {
     }
   }
 
-  if (loading) return <p className="text-gray-500">Loading...</p>
+  if (loading) return <p className="text-slate-500">Loading...</p>
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">Secrets</h1>
+        <h1 className="font-display text-3xl tracking-tight text-slate-900">Secrets</h1>
         <button onClick={() => setShowForm(!showForm)}
-          className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
+          className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors">
           {showForm ? 'Cancel' : 'Set Secret'}
         </button>
       </div>
-      {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4">{error}</div>}
+      {error && <div className="bg-red-50 text-red-700 p-3 rounded-xl ring-1 ring-red-200 text-sm mb-4">{error}</div>}
 
       {showForm && (
-        <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4 space-y-3">
+        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm p-4 mb-4 space-y-3">
           <input placeholder="Key name" value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <input placeholder="Value" type="password" value={form.value}
             onChange={(e) => setForm({ ...form, value: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <button onClick={save} disabled={saving}
-            className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-50">
+            className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors disabled:opacity-50">
             {saving ? 'Saving...' : 'Set Secret'}
           </button>
         </div>
       )}
 
       {secrets.length === 0 ? (
-        <p className="text-gray-500">No secrets yet.</p>
+        <p className="text-slate-500">No secrets yet.</p>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-gray-600">
+            <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
                 <th className="px-4 py-3">Key</th><th className="px-4 py-3">Created</th>
                 <th className="px-4 py-3">Updated</th><th className="px-4 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-slate-100">
               {secrets.map((s) => (
-                <tr key={s.id || s.key} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900 font-mono">{s.key}</td>
-                  <td className="px-4 py-3 text-gray-500">{new Date(s.created_at).toLocaleDateString()}</td>
-                  <td className="px-4 py-3 text-gray-500">{new Date(s.updated_at).toLocaleDateString()}</td>
+                <tr key={s.id || s.key} className="hover:bg-slate-50">
+                  <td className="px-4 py-3 font-medium text-slate-900 font-mono">{s.key}</td>
+                  <td className="px-4 py-3 text-slate-500">{new Date(s.created_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-3 text-slate-500">{new Date(s.updated_at).toLocaleDateString()}</td>
                   <td className="px-4 py-3 text-right space-x-2">
                     <button onClick={() => { setForm({ key: s.key, value: '' }); setShowForm(true) }}
-                      className="text-blue-600 text-xs hover:text-blue-800">Update</button>
-                    <button onClick={() => remove(s.key)} className="text-red-600 text-xs hover:text-red-800">Delete</button>
+                      className="text-blue-600 hover:text-blue-500 text-xs font-medium transition-colors">Update</button>
+                    <button onClick={() => remove(s.key)} className="text-red-600 hover:text-red-500 text-xs font-medium transition-colors">Delete</button>
                   </td>
                 </tr>
               ))}

@@ -36,55 +36,55 @@ export default function AgentListPage() {
     }
   }
 
-  if (loading) return <p className="text-gray-500">Loading...</p>
+  if (loading) return <p className="text-slate-500">Loading...</p>
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">Agents</h1>
+        <h1 className="font-display text-3xl tracking-tight text-slate-900">Agents</h1>
         <button onClick={() => setShowForm(!showForm)}
-          className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
+          className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors">
           {showForm ? 'Cancel' : 'Create Agent'}
         </button>
       </div>
-      {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4">{error}</div>}
+      {error && <div className="bg-red-50 text-red-700 p-3 rounded-xl ring-1 ring-red-200 text-sm mb-4">{error}</div>}
 
       {showForm && (
-        <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4 space-y-3">
+        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm p-4 mb-4 space-y-3">
           <input placeholder="Name (slug)" value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <input placeholder="Display Name" value={form.display_name}
             onChange={(e) => setForm({ ...form, display_name: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <textarea placeholder="Description" value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" rows={2} />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" rows={2} />
           <input placeholder="Model Deployment" value={form.model_deployment}
             onChange={(e) => setForm({ ...form, model_deployment: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <button onClick={create} disabled={saving}
-            className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-50">
+            className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors disabled:opacity-50">
             {saving ? 'Creating...' : 'Create'}
           </button>
         </div>
       )}
 
       {agents.length === 0 ? (
-        <p className="text-gray-500">No agents yet.</p>
+        <p className="text-slate-500">No agents yet.</p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {agents.map((a) => (
             <Link key={a.id} to={`/agents/${a.name}`}
-              className="bg-white rounded-lg border border-gray-200 p-4 hover:border-blue-300 transition-colors">
+              className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm p-4 hover:ring-blue-300 transition-colors">
               <div className="flex items-start justify-between mb-2">
-                <h3 className="font-semibold text-gray-900">{a.display_name || a.name}</h3>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${a.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                <h3 className="font-semibold text-slate-900">{a.display_name || a.name}</h3>
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${a.status === 'active' ? 'bg-green-50 text-green-700 ring-1 ring-green-600/20' : 'bg-slate-50 text-slate-600 ring-1 ring-slate-600/20'}`}>
                   {a.status}
                 </span>
               </div>
-              {a.description && <p className="text-sm text-gray-500 mb-2">{a.description}</p>}
-              <div className="text-xs text-gray-400 space-y-0.5">
+              {a.description && <p className="text-sm text-slate-500 mb-2">{a.description}</p>}
+              <div className="text-xs text-slate-400 space-y-0.5">
                 <p>Model: {a.model_deployment}</p>
                 <p>Version: {a.version}</p>
               </div>

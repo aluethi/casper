@@ -47,60 +47,60 @@ export default function DeploymentListPage() {
     }
   }
 
-  if (loading) return <p className="text-gray-500">Loading...</p>
+  if (loading) return <p className="text-slate-500">Loading...</p>
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">Deployments</h1>
-        <button onClick={() => setShowForm(!showForm)} className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
+        <h1 className="font-display text-3xl tracking-tight text-slate-900">Deployments</h1>
+        <button onClick={() => setShowForm(!showForm)} className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors">
           {showForm ? 'Cancel' : 'Create'}
         </button>
       </div>
-      {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4">{error}</div>}
+      {error && <div className="bg-red-50 text-red-700 p-3 rounded-xl ring-1 ring-red-200 text-sm mb-4">{error}</div>}
 
       {showForm && (
-        <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4 space-y-3">
+        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm p-4 mb-4 space-y-3">
           <input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <input placeholder="Slug" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <input placeholder="Model ID" value={form.model_id} onChange={(e) => setForm({ ...form, model_id: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <textarea placeholder='Default Params (JSON)' value={form.default_params}
             onChange={(e) => setForm({ ...form, default_params: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono" rows={3} />
-          <button onClick={create} disabled={saving} className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-50">
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow font-mono" rows={3} />
+          <button onClick={create} disabled={saving} className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors disabled:opacity-50">
             {saving ? 'Creating...' : 'Create Deployment'}
           </button>
         </div>
       )}
 
       {deployments.length === 0 ? (
-        <p className="text-gray-500">No deployments yet.</p>
+        <p className="text-slate-500">No deployments yet.</p>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-gray-600">
+            <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
                 <th className="px-4 py-3">Name</th><th className="px-4 py-3">Slug</th><th className="px-4 py-3">Model</th>
                 <th className="px-4 py-3">Status</th><th className="px-4 py-3">Created</th><th className="px-4 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-slate-100">
               {deployments.map((d) => (
-                <tr key={d.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{d.name}</td>
-                  <td className="px-4 py-3 text-gray-500 font-mono">{d.slug}</td>
-                  <td className="px-4 py-3 text-gray-500">{d.model_id}</td>
+                <tr key={d.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-3 font-medium text-slate-900">{d.name}</td>
+                  <td className="px-4 py-3 text-slate-500 font-mono">{d.slug}</td>
+                  <td className="px-4 py-3 text-slate-500">{d.model_id}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${d.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${d.is_active ? 'bg-green-50 text-green-700 ring-1 ring-green-600/20' : 'bg-slate-50 text-slate-600 ring-1 ring-slate-600/20'}`}>
                       {d.is_active ? 'Active' : 'Inactive'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-500">{new Date(d.created_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-3 text-slate-500">{new Date(d.created_at).toLocaleDateString()}</td>
                   <td className="px-4 py-3 text-right">
-                    <button onClick={() => remove(d.id)} className="text-red-600 hover:text-red-800 text-xs">Delete</button>
+                    <button onClick={() => remove(d.id)} className="text-red-600 hover:text-red-500 text-sm font-medium transition-colors">Delete</button>
                   </td>
                 </tr>
               ))}

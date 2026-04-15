@@ -76,65 +76,65 @@ export default function UsersPage() {
     }
   }
 
-  if (loading) return <p className="text-gray-500">Loading...</p>
+  if (loading) return <p className="text-slate-500">Loading...</p>
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">Users</h1>
+        <h1 className="font-display text-3xl tracking-tight text-slate-900">Users</h1>
         <button onClick={() => setShowForm(!showForm)}
-          className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
+          className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors">
           {showForm ? 'Cancel' : 'Add User'}
         </button>
       </div>
-      {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4">{error}</div>}
+      {error && <div className="bg-red-50 text-red-700 p-3 rounded-xl ring-1 ring-red-200 text-sm mb-4">{error}</div>}
 
       {showForm && (
-        <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4 space-y-3">
+        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm p-4 mb-4 space-y-3">
           <input placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow">
             <option value="member">Member</option>
             <option value="admin">Admin</option>
             <option value="owner">Owner</option>
           </select>
           <input placeholder="Scopes (comma-separated)" value={form.scopes}
             onChange={(e) => setForm({ ...form, scopes: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
+            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
           <button onClick={create} disabled={saving}
-            className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-50">
+            className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors disabled:opacity-50">
             {saving ? 'Creating...' : 'Add User'}
           </button>
         </div>
       )}
 
       {users.length === 0 ? (
-        <p className="text-gray-500">No users yet.</p>
+        <p className="text-slate-500">No users yet.</p>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left text-gray-600">
+            <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
                 <th className="px-4 py-3">Email</th><th className="px-4 py-3">Role</th>
                 <th className="px-4 py-3">Scopes</th><th className="px-4 py-3">Last Login</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-slate-100">
               {users.map((u) => (
-                <tr key={u.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{u.email}</td>
+                <tr key={u.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-3 font-medium text-slate-900">{u.email}</td>
                   <td className="px-4 py-3">
                     {editing === u.id ? (
                       <select value={editForm.role} onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
-                        className="border border-gray-300 rounded px-2 py-1 text-xs">
+                        className="rounded-lg ring-1 ring-slate-300 px-2 py-1 text-xs shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow">
                         <option value="member">Member</option>
                         <option value="admin">Admin</option>
                         <option value="owner">Owner</option>
                       </select>
                     ) : (
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${u.role === 'admin' || u.role === 'owner' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>
+                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${u.role === 'admin' || u.role === 'owner' ? 'bg-purple-50 text-purple-700 ring-1 ring-purple-600/20' : 'bg-slate-50 text-slate-600 ring-1 ring-slate-600/20'}`}>
                         {u.role}
                       </span>
                     )}
@@ -142,24 +142,24 @@ export default function UsersPage() {
                   <td className="px-4 py-3">
                     {editing === u.id ? (
                       <input value={editForm.scopes} onChange={(e) => setEditForm({ ...editForm, scopes: e.target.value })}
-                        className="border border-gray-300 rounded px-2 py-1 text-xs w-full" />
+                        className="rounded-lg ring-1 ring-slate-300 px-2 py-1 text-xs shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow w-full" />
                     ) : (
                       <div className="flex flex-wrap gap-1">
-                        {u.scopes?.map((s) => <span key={s} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{s}</span>)}
+                        {u.scopes?.map((s) => <span key={s} className="rounded-full px-2.5 py-0.5 text-xs font-medium bg-slate-50 text-slate-600 ring-1 ring-slate-600/20">{s}</span>)}
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-500">{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never'}</td>
+                  <td className="px-4 py-3 text-slate-500">{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never'}</td>
                   <td className="px-4 py-3 text-right space-x-2">
                     {editing === u.id ? (
                       <>
-                        <button onClick={() => saveEdit(u.id)} disabled={saving} className="text-blue-600 text-xs hover:text-blue-800">Save</button>
-                        <button onClick={() => setEditing(null)} className="text-gray-500 text-xs hover:text-gray-700">Cancel</button>
+                        <button onClick={() => saveEdit(u.id)} disabled={saving} className="text-blue-600 hover:text-blue-500 text-xs font-medium transition-colors">Save</button>
+                        <button onClick={() => setEditing(null)} className="text-slate-500 text-xs font-medium hover:text-slate-700 transition-colors">Cancel</button>
                       </>
                     ) : (
                       <>
-                        <button onClick={() => startEdit(u)} className="text-blue-600 text-xs hover:text-blue-800">Edit</button>
-                        <button onClick={() => remove(u.id)} className="text-red-600 text-xs hover:text-red-800">Delete</button>
+                        <button onClick={() => startEdit(u)} className="text-blue-600 hover:text-blue-500 text-xs font-medium transition-colors">Edit</button>
+                        <button onClick={() => remove(u.id)} className="text-red-600 hover:text-red-500 text-xs font-medium transition-colors">Delete</button>
                       </>
                     )}
                   </td>
