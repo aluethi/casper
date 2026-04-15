@@ -221,9 +221,24 @@ async fn assemble_system_prompt(
                 }
             }
             PromptBlock::Environment { .. } => {
-                let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                let now_utc = chrono::Utc::now();
+                let zurich: chrono_tz::Tz = "Europe/Zurich".parse().unwrap();
+                let now_local = now_utc.with_timezone(&zurich);
+                let tz_abbr = if now_local.format("%Z").to_string() == "CEST" { "CEST" } else { "CET" };
+                let weekday = now_utc.format("%A");
+                let day_month_year = now_utc.format("%-d %B %Y");
+                let utc_time = now_utc.format("%H:%M");
+                let local_time = now_local.format("%H:%M");
+                let day_of_year = now_utc.format("%-j");
+                let quarter = match now_utc.format("%m").to_string().parse::<u32>().unwrap_or(1) {
+                    1..=3 => "Q1", 4..=6 => "Q2", 7..=9 => "Q3", _ => "Q4",
+                };
+                let days_in_year = if now_utc.format("%Y").to_string().parse::<i32>().unwrap_or(2026) % 4 == 0 { 366 } else { 365 };
+                let datetime_str = format!(
+                    "{weekday}, {day_month_year}, {utc_time} UTC ({local_time} {tz_abbr}, Europe/Zurich) — {quarter}, day {day_of_year}/{days_in_year}"
+                );
                 sections.push(format!(
-                    "Current date/time: {now}\nAgent: {agent_name}\nTenant: {tenant_name}"
+                    "Current date/time: {datetime_str}\nAgent: {agent_name}\nTenant: {tenant_name}"
                 ));
             }
             PromptBlock::TenantMemory { .. } => {
