@@ -19,6 +19,8 @@ pub struct ListenConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
     pub url: String,
+    /// Owner URL — bypasses RLS. Falls back to url if not set.
+    pub owner_url: Option<String>,
     #[serde(default = "default_main_pool_size")]
     pub main_pool_size: u32,
     #[serde(default = "default_analytics_pool_size")]

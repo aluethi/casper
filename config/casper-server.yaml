@@ -4,6 +4,7 @@ listen:
 
 database:
   url: postgres://casper:casper@localhost:5432/casper
+  owner_url: "postgres:///casper?host=/var/run/postgresql&user=sysadm"
   main_pool_size: 30
   analytics_pool_size: 10
 

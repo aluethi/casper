@@ -1,8 +1,11 @@
 pub mod auth;
 mod config;
+mod routes;
 
 use std::sync::Arc;
-use axum::{Json, Router, extract::State, routing::get};
+use axum::{Json, Router, extract::State, middleware, routing::get};
+use casper_auth::{JwtSigner, RevocationCache};
+use casper_base::JwtVerifier;
 use casper_observe::{AuditWriter, RuntimeMetrics, UsageRecorder};
 use serde_json::json;
 use sqlx::PgPool;
@@ -11,16 +14,22 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+use auth::AuthState;
 use config::ServerConfig;
+use routes::auth_routes::auth_router;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<ServerConfig>,
     pub db: PgPool,
+    pub db_owner: PgPool,  // Bypasses RLS (table owner)
     pub analytics_db: PgPool,
     pub audit: AuditWriter,
     pub usage: UsageRecorder,
     pub metrics: RuntimeMetrics,
+    pub jwt_signer: Option<Arc<JwtSigner>>,
+    pub jwt_verifier: Option<Arc<JwtVerifier>>,
+    pub revocation_cache: RevocationCache,
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -82,6 +91,52 @@ async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+fn setup_signing_keys(config: &ServerConfig) -> (Option<Arc<JwtSigner>>, Option<Arc<JwtVerifier>>) {
+    if config.auth.dev_auth {
+        // In dev mode, generate ephemeral keys
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng)
+            .expect("failed to generate dev signing key");
+        let pkcs8_bytes = pkcs8.as_ref();
+
+        let signer = JwtSigner::from_pkcs8_der(pkcs8_bytes)
+            .expect("failed to create JWT signer");
+
+        use ring::signature::KeyPair;
+        let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes)
+            .expect("failed to parse keypair");
+        let pub_bytes: [u8; 32] = key_pair.public_key().as_ref().try_into().unwrap();
+        let verifier = JwtVerifier::from_public_key(&pub_bytes)
+            .expect("failed to create JWT verifier");
+
+        tracing::info!("Dev mode: using ephemeral signing keys");
+        (Some(Arc::new(signer)), Some(Arc::new(verifier)))
+    } else {
+        // Production: load from file
+        match &config.auth.signing_key_file {
+            Some(path) => {
+                let key_bytes = std::fs::read(path)
+                    .unwrap_or_else(|e| panic!("failed to read signing key from {path}: {e}"));
+                let signer = JwtSigner::from_pkcs8_der(&key_bytes)
+                    .expect("failed to create JWT signer from file");
+
+                use ring::signature::KeyPair;
+                let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(&key_bytes)
+                    .expect("failed to parse keypair from file");
+                let pub_bytes: [u8; 32] = key_pair.public_key().as_ref().try_into().unwrap();
+                let verifier = JwtVerifier::from_public_key(&pub_bytes)
+                    .expect("failed to create JWT verifier from file");
+
+                (Some(Arc::new(signer)), Some(Arc::new(verifier)))
+            }
+            None => {
+                tracing::warn!("No signing key configured, JWT auth disabled");
+                (None, None)
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
@@ -105,13 +160,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&config.database.url)
         .await?;
 
-    run_migrations(&main_pool).await?;
+    // Owner pool — bypasses RLS (for auth lookups, platform admin)
+    let owner_url = config.database.owner_url.as_deref().unwrap_or(&config.database.url);
+    let owner_pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(owner_url)
+        .await?;
+    tracing::info!("Connected to database (owner pool)");
+
+    run_migrations(&owner_pool).await?;
     tracing::info!("Migrations complete");
 
     // Start observability
     let (audit, _audit_handle) = AuditWriter::start(main_pool.clone(), 10_000);
     let usage = UsageRecorder::new(main_pool.clone());
     let metrics = RuntimeMetrics::new();
+
+    // Setup signing keys
+    let (jwt_signer, jwt_verifier) = setup_signing_keys(&config);
+
+    // Setup revocation cache
+    let revocation_cache = RevocationCache::new();
 
     let cors = if config.listen.cors_origins.is_empty() {
         CorsLayer::new().allow_origin(Any)
@@ -129,16 +198,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState {
         config: Arc::new(config.clone()),
-        db: main_pool,
+        db: main_pool.clone(),
+        db_owner: owner_pool,
         analytics_db: analytics_pool,
         audit,
         usage,
         metrics,
+        jwt_signer,
+        jwt_verifier: jwt_verifier.clone(),
+        revocation_cache: revocation_cache.clone(),
     };
 
-    let app = Router::new()
+    // Auth middleware state
+    let auth_state = AuthState {
+        jwt_verifier: jwt_verifier.unwrap_or_else(|| {
+            // Dummy verifier for when JWT is not configured
+            Arc::new(JwtVerifier::from_public_key(&[0u8; 32]).unwrap())
+        }),
+        revocation_cache,
+        db: main_pool,
+    };
+
+    // Routes that require authentication
+    let authenticated = Router::new()
+        .route("/auth/status", get(routes::auth_routes::auth_status))
+        .layer(middleware::from_fn_with_state(
+            auth_state.clone(),
+            auth::auth_middleware,
+        ));
+
+    // Public routes (no auth required)
+    let public = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics_handler))
+        .merge(auth_router());
+
+    let app = Router::new()
+        .merge(authenticated)
+        .merge(public)
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

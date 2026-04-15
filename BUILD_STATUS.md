@@ -129,3 +129,13 @@
 **Dependencies added:** sha2, hex, chrono (casper-server)
 **Notes:** Both JWT and API key auth produce the same TenantContext type. API keys default to operator role. ScopeGuard extractor reads TenantContext from request extensions and provides require() method. No const generic RequireScope (Rust doesn't support &str const generics). AuthState holds jwt_verifier, revocation_cache, db pool.
 ---
+
+## Task 1K — Auth routes
+**Status:** PASSED
+**Completed:** 2026-04-15T08:45:00Z
+**Commit:** pending
+**Summary:** Implemented POST /auth/login (dev mode), POST /auth/refresh (token rotation), POST /auth/logout (revocation), GET /auth/status (authenticated). All verified end-to-end with curl.
+**Files changed:** casper-server/src/routes/auth_routes.rs (new), casper-server/src/routes/mod.rs (new), casper-server/src/main.rs, casper-server/src/config.rs, config/casper-server.yaml
+**Dependencies added:** ring (casper-server, for ephemeral dev key generation)
+**Notes:** Added db_owner pool (connects as sysadm via Unix socket peer auth, bypasses RLS) for auth lookups where tenant_id is unknown at query time. Dev mode generates ephemeral Ed25519 keypair on startup. Auth routes are split: login/refresh/logout are public, status goes through auth middleware. Refresh token rotation revokes old token and issues new pair.
+---

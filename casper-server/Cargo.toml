@@ -33,6 +33,7 @@ uuid = { workspace = true }
 sha2 = { workspace = true }
 hex = "0.4"
 chrono = { workspace = true }
+ring = "0.17"
 
 [dev-dependencies]
 reqwest = { workspace = true }
