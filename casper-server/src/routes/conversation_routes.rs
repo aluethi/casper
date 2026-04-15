@@ -10,10 +10,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-
-fn to_rfc3339(dt: OffsetDateTime) -> String {
-    dt.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
-}
+use crate::helpers::to_rfc3339;
+use crate::pagination::{PaginatedResponse, Pagination};
 
 fn serialize_dt<S: serde::Serializer>(dt: &OffsetDateTime, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&to_rfc3339(*dt))
@@ -41,19 +39,6 @@ pub struct ListConversationsParams {
 
 fn default_page() -> i64 { 1 }
 fn default_per_page() -> i64 { 50 }
-
-#[derive(Serialize)]
-pub struct PaginatedResponse<T> {
-    pub data: Vec<T>,
-    pub pagination: Pagination,
-}
-
-#[derive(Serialize)]
-pub struct Pagination {
-    pub page: i64,
-    pub per_page: i64,
-    pub total: i64,
-}
 
 #[derive(sqlx::FromRow, Serialize)]
 pub struct ConversationResponse {

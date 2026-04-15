@@ -10,10 +10,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-
-fn to_rfc3339(dt: OffsetDateTime) -> String {
-    dt.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
-}
+use crate::helpers::to_rfc3339;
+use crate::pagination::{PaginationParams, PaginatedResponse, Pagination};
 
 fn opt_to_rfc3339(dt: Option<OffsetDateTime>) -> Option<String> {
     dt.map(|d| to_rfc3339(d))
@@ -48,30 +46,6 @@ pub struct UserResponse {
     pub last_login_at: Option<String>,
     pub created_at: String,
     pub created_by: String,
-}
-
-#[derive(Deserialize)]
-pub struct PaginationParams {
-    #[serde(default = "default_page")]
-    pub page: i64,
-    #[serde(default = "default_per_page")]
-    pub per_page: i64,
-}
-
-fn default_page() -> i64 { 1 }
-fn default_per_page() -> i64 { 50 }
-
-#[derive(Serialize)]
-pub struct PaginatedResponse<T> {
-    pub data: Vec<T>,
-    pub pagination: Pagination,
-}
-
-#[derive(Serialize)]
-pub struct Pagination {
-    pub page: i64,
-    pub per_page: i64,
-    pub total: i64,
 }
 
 type UserRow = (Uuid, Uuid, String, String, Vec<String>, Option<String>, Option<String>, Option<OffsetDateTime>, OffsetDateTime, String);

@@ -1,5 +1,7 @@
 pub mod auth;
 mod config;
+pub mod helpers;
+pub mod pagination;
 mod routes;
 pub mod ws;
 

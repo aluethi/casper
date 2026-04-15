@@ -11,10 +11,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-
-fn to_rfc3339(dt: OffsetDateTime) -> String {
-    dt.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
-}
+use crate::helpers::to_rfc3339;
+use crate::pagination::{PaginationParams, PaginatedResponse, Pagination};
 
 // ── Request / Response types ───────────────────────────────────────
 
@@ -101,30 +99,6 @@ pub struct ModelResponse {
     pub published: bool,
     pub is_active: bool,
     pub created_at: String,
-}
-
-#[derive(Deserialize)]
-pub struct PaginationParams {
-    #[serde(default = "default_page")]
-    pub page: i64,
-    #[serde(default = "default_per_page")]
-    pub per_page: i64,
-}
-
-fn default_page() -> i64 { 1 }
-fn default_per_page() -> i64 { 50 }
-
-#[derive(Serialize)]
-pub struct PaginatedResponse<T> {
-    pub data: Vec<T>,
-    pub pagination: Pagination,
-}
-
-#[derive(Serialize)]
-pub struct Pagination {
-    pub page: i64,
-    pub per_page: i64,
-    pub total: i64,
 }
 
 // ── Row mapping ────────────────────────────────────────────────────

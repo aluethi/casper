@@ -11,10 +11,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-
-fn to_rfc3339(dt: OffsetDateTime) -> String {
-    dt.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
-}
+use crate::helpers::to_rfc3339;
 
 // ── Request / Response types ───────────────────────────────────────
 

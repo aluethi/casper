@@ -10,10 +10,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-
-fn to_rfc3339(dt: OffsetDateTime) -> String {
-    dt.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
-}
+use crate::helpers::to_rfc3339;
+use crate::pagination::{PaginationParams, PaginatedResponse, Pagination};
 
 // ── Request / Response types ───────────────────────────────────────
 
@@ -103,30 +101,6 @@ const DEPLOYMENT_COLUMNS: &str =
     "id, tenant_id, model_id, name, slug, \
      backend_sequence, retry_attempts, retry_backoff_ms, fallback_enabled, timeout_ms, \
      default_params, rate_limit_rpm, is_active, created_at";
-
-#[derive(Deserialize)]
-pub struct PaginationParams {
-    #[serde(default = "default_page")]
-    pub page: i64,
-    #[serde(default = "default_per_page")]
-    pub per_page: i64,
-}
-
-fn default_page() -> i64 { 1 }
-fn default_per_page() -> i64 { 50 }
-
-#[derive(Serialize)]
-pub struct PaginatedResponse<T> {
-    pub data: Vec<T>,
-    pub pagination: Pagination,
-}
-
-#[derive(Serialize)]
-pub struct Pagination {
-    pub page: i64,
-    pub per_page: i64,
-    pub total: i64,
-}
 
 #[derive(Serialize)]
 pub struct TestRouteResponse {
