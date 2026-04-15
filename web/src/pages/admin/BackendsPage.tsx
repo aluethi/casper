@@ -18,7 +18,8 @@ export default function BackendsPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ name: '', provider: 'anthropic', base_url: '', api_key_enc: '', region: '', max_concurrent: 8 })
   const [editId, setEditId] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState({ base_url: '', api_key_enc: '', region: '', priority: 100 })
+  const [editProvider, setEditProvider] = useState('')
+  const [editForm, setEditForm] = useState({ base_url: '', api_key_enc: '', region: '', priority: 100, max_concurrent: 8 })
 
   // Agent key management
   const [keysForBackend, setKeysForBackend] = useState<string | null>(null)
@@ -54,14 +55,19 @@ export default function BackendsPage() {
 
   const startEdit = (b: Backend) => {
     setEditId(b.id)
-    setEditForm({ base_url: b.base_url || '', api_key_enc: '', region: b.region || '', priority: b.priority })
+    setEditProvider(b.provider)
+    setEditForm({ base_url: b.base_url || '', api_key_enc: '', region: b.region || '', priority: b.priority, max_concurrent: 8 })
   }
 
   const saveEdit = () => {
     if (!editId) return
     const body: Record<string, unknown> = { priority: editForm.priority }
-    if (editForm.base_url) body.base_url = editForm.base_url
-    if (editForm.api_key_enc) body.api_key_enc = editForm.api_key_enc
+    if (editProvider !== 'agent') {
+      if (editForm.base_url) body.base_url = editForm.base_url
+      if (editForm.api_key_enc) body.api_key_enc = editForm.api_key_enc
+    } else {
+      body.extra_config = { max_concurrent: editForm.max_concurrent }
+    }
     if (editForm.region) body.region = editForm.region
     api.patch(`/api/v1/backends/${editId}`, body).then(() => {
       setEditId(null)
@@ -152,13 +158,21 @@ export default function BackendsPage() {
 
       {editId && (
         <div className="mb-6 p-4 bg-blue-50 rounded-2xl ring-1 ring-blue-200 shadow-sm space-y-3">
-          <h3 className="text-sm font-semibold text-blue-800">Editing backend</h3>
-          <div className="grid grid-cols-4 gap-3">
-            <input placeholder="Base URL" value={editForm.base_url} onChange={e => setEditForm({...editForm, base_url: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
-            <input type="password" placeholder="New API Key (leave empty to keep)" value={editForm.api_key_enc} onChange={e => setEditForm({...editForm, api_key_enc: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
-            <input placeholder="Region" value={editForm.region} onChange={e => setEditForm({...editForm, region: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
-            <input type="number" placeholder="Priority" value={editForm.priority} onChange={e => setEditForm({...editForm, priority: +e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
-          </div>
+          <h3 className="text-sm font-semibold text-blue-800">Editing backend {editProvider === 'agent' ? '(agent)' : ''}</h3>
+          {editProvider !== 'agent' ? (
+            <div className="grid grid-cols-4 gap-3">
+              <input placeholder="Base URL" value={editForm.base_url} onChange={e => setEditForm({...editForm, base_url: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+              <input type="password" placeholder="New API Key (leave empty to keep)" value={editForm.api_key_enc} onChange={e => setEditForm({...editForm, api_key_enc: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+              <input placeholder="Region" value={editForm.region} onChange={e => setEditForm({...editForm, region: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+              <input type="number" placeholder="Priority" value={editForm.priority} onChange={e => setEditForm({...editForm, priority: +e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-3">
+              <input type="number" placeholder="Max concurrent" value={editForm.max_concurrent} onChange={e => setEditForm({...editForm, max_concurrent: +e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+              <input placeholder="Region" value={editForm.region} onChange={e => setEditForm({...editForm, region: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+              <input type="number" placeholder="Priority" value={editForm.priority} onChange={e => setEditForm({...editForm, priority: +e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+            </div>
+          )}
           <div className="flex gap-2">
             <button onClick={saveEdit} className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors">Save</button>
             <button onClick={() => setEditId(null)} className="rounded-full text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 px-4 py-2 transition-colors">Cancel</button>
