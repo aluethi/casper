@@ -233,26 +233,8 @@ async fn execute_run(
 ) -> Result<RunResponse, CasperError> {
     let correlation_id = Uuid::now_v7();
 
-    // Store the user message
-    let user_msg_id = Uuid::now_v7();
-    let user_content = serde_json::Value::String(message.to_string());
-    let token_estimate = (message.len() / 4) as i32;
-
-    sqlx::query(
-        "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
-         VALUES ($1, $2, $3, 'user', $4, $5, $6)",
-    )
-    .bind(user_msg_id)
-    .bind(tenant_id)
-    .bind(conversation_id)
-    .bind(&user_content)
-    .bind(token_estimate)
-    .bind(author)
-    .execute(&state.db_owner)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error storing user message: {e}")))?;
-
-    // Try to run the agent engine; on failure, return a placeholder response
+    // The engine stores user + assistant messages in the DB.
+    // On engine failure (no LLM backend), we store a placeholder below.
     let (assistant_text, usage) = {
         let engine = casper_agent::engine::AgentEngine::new(
             state.db_owner.clone(),
@@ -310,41 +292,64 @@ async fn execute_run(
         }
     };
 
-    // Store the assistant response message
-    let assistant_msg_id = Uuid::now_v7();
-    let assistant_content = serde_json::Value::String(assistant_text.clone());
-    let assistant_token_est = (assistant_text.len() / 4) as i32;
+    // For the placeholder path (engine failure), store user+assistant messages manually
+    // since the engine didn't get far enough to store them.
+    if usage.llm_calls == 0 {
+        // Store user message
+        sqlx::query(
+            "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
+             VALUES ($1, $2, $3, 'user', $4, $5, $6)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(Uuid::now_v7())
+        .bind(tenant_id)
+        .bind(conversation_id)
+        .bind(&serde_json::Value::String(message.to_string()))
+        .bind((message.len() / 4) as i32)
+        .bind(author)
+        .execute(&state.db_owner)
+        .await
+        .ok();
 
-    sqlx::query(
-        "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
-         VALUES ($1, $2, $3, 'assistant', $4, $5, $6)",
+        // Store placeholder assistant response
+        sqlx::query(
+            "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
+             VALUES ($1, $2, $3, 'assistant', $4, $5, $6)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(tenant_id)
+        .bind(conversation_id)
+        .bind(&serde_json::Value::String(assistant_text.clone()))
+        .bind((assistant_text.len() / 4) as i32)
+        .bind(agent_name)
+        .execute(&state.db_owner)
+        .await
+        .ok();
+    }
+
+    // Get the most recent assistant message for the response
+    let msg_row: Option<(Uuid, String, serde_json::Value, OffsetDateTime)> = sqlx::query_as(
+        "SELECT id, role, content, created_at FROM messages
+         WHERE conversation_id = $1 AND role = 'assistant'
+         ORDER BY created_at DESC LIMIT 1",
     )
-    .bind(assistant_msg_id)
-    .bind(tenant_id)
     .bind(conversation_id)
-    .bind(&assistant_content)
-    .bind(assistant_token_est)
-    .bind(agent_name)
-    .execute(&state.db_owner)
+    .fetch_optional(&state.db_owner)
     .await
-    .map_err(|e| CasperError::Internal(format!("DB error storing assistant message: {e}")))?;
+    .ok()
+    .flatten();
 
-    // Fetch the stored message to get the created_at timestamp
-    let msg_row: (Uuid, String, serde_json::Value, OffsetDateTime) = sqlx::query_as(
-        "SELECT id, role, content, created_at FROM messages WHERE id = $1",
-    )
-    .bind(assistant_msg_id)
-    .fetch_one(&state.db_owner)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error fetching message: {e}")))?;
+    let (msg_id, msg_role, msg_content, msg_created) = msg_row.unwrap_or_else(|| {
+        (Uuid::now_v7(), "assistant".to_string(), serde_json::Value::String(assistant_text.clone()), OffsetDateTime::now_utc())
+    });
 
     Ok(RunResponse {
         conversation_id,
         message: MessageResponse {
-            id: msg_row.0,
-            role: msg_row.1,
-            content: msg_row.2,
-            created_at: msg_row.3,
+            id: msg_id,
+            role: msg_role,
+            content: msg_content,
+            created_at: msg_created,
         },
         usage,
         correlation_id,
