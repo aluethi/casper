@@ -139,3 +139,13 @@
 **Dependencies added:** ring (casper-server, for ephemeral dev key generation)
 **Notes:** Added db_owner pool (connects as sysadm via Unix socket peer auth, bypasses RLS) for auth lookups where tenant_id is unknown at query time. Dev mode generates ephemeral Ed25519 keypair on startup. Auth routes are split: login/refresh/logout are public, status goes through auth middleware. Refresh token rotation revokes old token and issues new pair.
 ---
+
+## Task 2A — Tenant CRUD
+**Status:** PASSED
+**Completed:** 2026-04-15T08:50:00Z
+**Commit:** pending
+**Summary:** Implemented POST/GET/PATCH /api/v1/tenants with platform:admin scope. Create also creates owner user and initializes tenant_memory. Paginated list. All verified end-to-end.
+**Files changed:** casper-server/src/routes/tenant_routes.rs (new), casper-server/src/routes/mod.rs, casper-server/src/main.rs, casper-server/Cargo.toml
+**Dependencies added:** time (casper-server)
+**Notes:** All tenant routes use db_owner pool (bypasses RLS). Uses time::OffsetDateTime for DB columns, converts to RFC3339 strings in JSON responses. TenantRow type alias simplifies query_as usage. Tenant creation also initializes empty tenant_memory row and creates owner user with admin:* scope.
+---
