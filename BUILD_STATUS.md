@@ -239,3 +239,13 @@
 **Dependencies added:** none
 **Notes:** Dockerfile uses stub-source trick for dependency caching. Runtime runs as non-root casper user with healthcheck. CI has two jobs: check (lint+test) and docker (image build). README covers both Docker and local dev setup. Config YAML fully documented with inline comments.
 ---
+
+## Task 10A — Frontend project setup, auth, Playwright
+**Status:** PASSED
+**Completed:** 2026-04-15T12:30:00Z
+**Commit:** pending
+**Summary:** React 18 + TypeScript + Vite 6 + Tailwind CSS v4 SPA. Zustand auth store with localStorage persistence. Axios client with auth interceptor. Login page, dashboard, app shell with sidebar. 13 page stubs. TypeScript types for all API entities. Build: 193KB JS → 62KB gzipped.
+**Files changed:** web/ (complete setup: 25+ files including package.json, vite.config.ts, tsconfig, src/**/*.tsx, src/**/*.ts)
+**Dependencies added:** react, react-dom, react-router-dom, zustand, axios, vite, tailwindcss, typescript
+**Notes:** Vite dev server proxies /api, /auth, /v1, /health to localhost:3000. Auth store persists to localStorage. ProtectedRoute component redirects to /login. Layout has sidebar with Inference/Agents/Settings sections. All pages are placeholder stubs ready for real implementation in 10B-10L.
+---
