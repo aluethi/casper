@@ -20,8 +20,10 @@
 //! - `delegates`     — Available sub-agents with descriptions
 //! - `datasource`    — External data fetched at assembly time (budget-capped)
 
+pub mod assembler;
 pub mod history;
 pub mod types;
 
+pub use assembler::assemble_system_prompt;
 pub use history::load_conversation_history;
 pub use types::*;
