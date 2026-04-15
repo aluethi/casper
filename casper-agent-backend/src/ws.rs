@@ -4,8 +4,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite;
 
-use crate::SidecarConfig;
-
 // ── Protocol messages ─────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,14 +90,16 @@ pub struct InferenceUsage {
 // ── Connection ────────────────────────────────────────────────────
 
 pub async fn run_connection(
-    config: &SidecarConfig,
+    casper_url: &str,
+    agent_key: &str,
+    inference_base_url_override: Option<&str>,
     http_client: &reqwest::Client,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let url = url::Url::parse(&config.casper_url)?;
+    let url = url::Url::parse(casper_url)?;
 
     let request = tungstenite::http::Request::builder()
-        .uri(config.casper_url.as_str())
-        .header("Authorization", format!("Bearer {}", config.agent_key))
+        .uri(casper_url)
+        .header("Authorization", format!("Bearer {}", agent_key))
         .header("Host", url.host_str().unwrap_or("localhost"))
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
@@ -124,7 +124,7 @@ pub async fn run_connection(
     let server_config = wait_for_ack(&mut ws_source).await?;
 
     // Resolve inference URL: local override > server config > default
-    let inference_base_url = config.inference_base_url.clone()
+    let inference_base_url = inference_base_url_override.map(|s| s.to_string())
         .or(server_config.inference_base_url.clone())
         .unwrap_or_else(|| "http://localhost:11434".to_string());
     let inference_type = server_config.inference_server_type.clone()
