@@ -1,6 +1,7 @@
 pub mod auth;
 mod config;
 mod routes;
+pub mod ws;
 
 use std::sync::Arc;
 use axum::{Json, Router, extract::State, middleware, routing::get};
@@ -34,6 +35,7 @@ pub struct AppState {
     pub revocation_cache: RevocationCache,
     pub http_client: reqwest::Client,
     pub async_tasks: Arc<DashMap<Uuid, Option<serde_json::Value>>>,
+    pub agent_registry: Arc<ws::AgentBackendRegistry>,
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -45,10 +47,13 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         Err(_) => "error",
     };
 
+    let agent_backends = state.agent_registry.health_status();
+
     Json(json!({
         "status": "ok",
         "db": db_status,
-        "version": env!("CARGO_PKG_VERSION")
+        "version": env!("CARGO_PKG_VERSION"),
+        "agent_backends": agent_backends
     }))
 }
 
@@ -69,6 +74,7 @@ async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>>
     let migration_files = [
         ("0001_platform", include_str!("../../migrations/0001_platform.sql")),
         ("0002_tenant", include_str!("../../migrations/0002_tenant.sql")),
+        ("0003_agent_backends", include_str!("../../migrations/0003_agent_backends.sql")),
     ];
 
     for (name, sql) in migration_files {
@@ -206,6 +212,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .expect("failed to build HTTP client");
 
+    let agent_registry = Arc::new(ws::AgentBackendRegistry::new(metrics.clone()));
+
     let state = AppState {
         config: Arc::new(config.clone()),
         db: main_pool.clone(),
@@ -219,6 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         revocation_cache: revocation_cache.clone(),
         http_client,
         async_tasks: Arc::new(DashMap::new()),
+        agent_registry,
     };
 
     // Auth middleware state — uses owner pool to bypass RLS for API key lookups
@@ -254,15 +263,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::run_routes::run_router())
         .merge(routes::feedback_routes::feedback_router())
         .merge(routes::training_routes::training_router())
+        .merge(routes::agent_backend_routes::agent_backend_router())
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             auth::auth_middleware,
         ));
 
     // Public routes (no auth required)
+    // WebSocket endpoint does its own csa- key auth
     let public = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics_handler))
+        .route("/agent/connect", get(ws::agent_ws_handler))
         .merge(auth_router());
 
     let app = Router::new()

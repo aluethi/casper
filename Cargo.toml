@@ -13,6 +13,7 @@ members = [
     "crates/casper-agent",
     "casper-server",
     "casper-cli",
+    "casper-agent-backend",
 ]
 
 [workspace.package]
@@ -25,7 +26,7 @@ license = "Proprietary"
 tokio = { version = "1", features = ["full"] }
 
 # Web framework
-axum = { version = "0.8", features = ["macros", "multipart"] }
+axum = { version = "0.8", features = ["macros", "multipart", "ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tower = { version = "0.5" }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
@@ -77,6 +78,10 @@ wiremock = "0.6"
 
 # Error handling
 thiserror = "2"
+
+# WebSocket client
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+url = "2"
 
 # Misc
 bytes = "1"

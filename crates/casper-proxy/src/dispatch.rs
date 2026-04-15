@@ -30,6 +30,13 @@ pub async fn dispatch(
         "openai" | "azure_openai" | "openai_compatible" => {
             crate::openai::call(client, base_url, api_key, request).await
         }
+        "agent" => {
+            // Agent backends are dispatched via WebSocket, not HTTP.
+            // The caller (inference route) must handle this before calling dispatch.
+            Err(CasperError::Internal(
+                "agent backends must be dispatched via AgentBackendRegistry".into(),
+            ))
+        }
         other => Err(CasperError::Internal(format!(
             "unsupported provider: {other}"
         ))),
