@@ -13,9 +13,19 @@
 ## Task 0B — Database migration (platform tables)
 **Status:** PASSED
 **Completed:** 2026-04-15T07:35:00Z
-**Commit:** pending
+**Commit:** 0ec2cc2
 **Summary:** Created 0001_platform.sql with 7 platform tables. pgvector extension deferred to 0002 (not installed on system yet — needs apt install postgresql-16-pgvector).
 **Files changed:** migrations/0001_platform.sql
 **Dependencies added:** none
 **Notes:** pgvector CREATE EXTENSION is commented out in 0001 — it's only needed for document_chunks in 0002. Database runs as sysadm user (owner), casper user has full grants. uuid-ossp extension enabled. Tables owned by sysadm — RLS will use SET LOCAL app.tenant_id.
+---
+
+## Task 0C — Database migration (tenant-scoped tables)
+**Status:** PASSED
+**Completed:** 2026-04-15T07:40:00Z
+**Commit:** pending
+**Summary:** Created 0002_tenant.sql with 19 tenant-scoped tables + RLS policies + conversation_quality view. 26 total tables, 1 view. RLS verified.
+**Files changed:** migrations/0002_tenant.sql
+**Dependencies added:** none
+**Notes:** document_chunks created WITHOUT embedding vector column (pgvector not installed). Will need migration 0003 to add `embedding vector(1536)` column + ivfflat index once pgvector is installed. Changed usage_events index from `(created_at::date)` to just `created_at` because date cast is not immutable. casper role changed from SUPERUSER to NOSUPERUSER so RLS actually works. App should connect as `casper` user, table owner is `sysadm`.
 ---
