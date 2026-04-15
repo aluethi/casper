@@ -1,0 +1,16 @@
+[package]
+name = "casper-observe"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+casper-base = { workspace = true }
+casper-db = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+prometheus = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

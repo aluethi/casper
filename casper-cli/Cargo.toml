@@ -1,0 +1,16 @@
+[package]
+name = "casper-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "casper"
+path = "src/main.rs"
+
+[dependencies]
+casper-base = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

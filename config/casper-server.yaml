@@ -1,0 +1,31 @@
+listen:
+  port: 3000
+  cors_origins: ["http://localhost:5173"]
+
+database:
+  url: postgres://casper:casper@localhost:5432/casper
+  main_pool_size: 30
+  analytics_pool_size: 10
+
+auth:
+  signing_key_file: /run/secrets/casper_signing_key
+  master_key_file: /run/secrets/casper_master_key
+  dev_auth: true
+  admin_email: admin@ventoo.ch
+
+web_search:
+  base_url: https://search.ventoo.ai
+  format: json
+  max_results: 10
+
+web_fetch:
+  timeout_secs: 30
+  max_response_bytes: 1048576
+
+knowledge:
+  storage_path: ./data/knowledge
+  embedding_deployment: embeddings-default
+
+actors:
+  idle_timeout_secs: 300
+  max_concurrent_per_tenant: 50

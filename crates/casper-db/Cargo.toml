@@ -1,0 +1,11 @@
+[package]
+name = "casper-db"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+casper-base = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,36 @@
+[package]
+name = "casper-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "casper-server"
+path = "src/main.rs"
+
+[dependencies]
+casper-base = { workspace = true }
+casper-db = { workspace = true }
+casper-auth = { workspace = true }
+casper-vault = { workspace = true }
+casper-observe = { workspace = true }
+casper-catalog = { workspace = true }
+casper-proxy = { workspace = true }
+casper-knowledge = { workspace = true }
+casper-mcp = { workspace = true }
+casper-agent = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }
+wiremock = { workspace = true }
