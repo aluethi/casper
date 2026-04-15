@@ -26,18 +26,20 @@ const DEFAULT_MAX_TURNS: usize = 25;
 
 // ── Agent configuration row from DB ──────────────────────────────
 
-/// Minimal agent configuration loaded from the database.
+/// Agent configuration loaded from the database.
 #[derive(Debug)]
 struct AgentConfig {
     pub deployment_slug: String,
-    pub system_prompt: String,
+    pub prompt_stack: serde_json::Value,
+    pub config: serde_json::Value,
+    pub system_prompt: String, // assembled from prompt_stack
     pub max_turns: i32,
     pub max_tokens: i32,
     pub temperature: f64,
 }
 
 /// Row type for the agent config query.
-type AgentConfigRow = (String, String, i32, i32, f64);
+type AgentConfigRow = (String, serde_json::Value, serde_json::Value);
 
 // ── LLM caller trait ─────────────────────────────────────────────
 
@@ -178,6 +180,104 @@ pub struct AgentEngine {
     pub llm_caller: Arc<dyn LlmCaller>,
     pub audit_writer: Option<AuditWriter>,
     pub usage_recorder: Option<UsageRecorder>,
+}
+
+/// Assemble the system prompt from prompt_stack blocks.
+/// Walks each block in order and concatenates their rendered content.
+async fn assemble_system_prompt(
+    prompt_stack: &serde_json::Value,
+    tenant_id: Uuid,
+    agent_name: &str,
+    db: &PgPool,
+) -> String {
+    use crate::prompt::types::PromptBlock;
+
+    let blocks: Vec<PromptBlock> = serde_json::from_value(prompt_stack.clone()).unwrap_or_default();
+    let mut sections: Vec<String> = Vec::new();
+
+    for block in &blocks {
+        match block {
+            PromptBlock::Text { content, .. } => {
+                if !content.is_empty() {
+                    sections.push(content.clone());
+                }
+            }
+            PromptBlock::Environment { .. } => {
+                let now = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
+                sections.push(format!(
+                    "Current date/time: {now}\nAgent: {agent_name}\nTenant: {tenant_id}"
+                ));
+            }
+            PromptBlock::Variable { key, value, .. } => {
+                sections.push(format!("{key}: {value}"));
+            }
+            PromptBlock::AgentMemory { .. } => {
+                // Load agent memory from DB
+                let row: Option<(String,)> = sqlx::query_as(
+                    "SELECT content FROM agent_memory WHERE tenant_id = $1 AND agent_name = $2"
+                )
+                .bind(tenant_id)
+                .bind(agent_name)
+                .fetch_optional(db)
+                .await
+                .ok()
+                .flatten();
+                if let Some((content,)) = row {
+                    if !content.is_empty() {
+                        sections.push(format!("## Agent Memory\n\n{content}"));
+                    }
+                }
+            }
+            PromptBlock::TenantMemory { .. } => {
+                let row: Option<(String,)> = sqlx::query_as(
+                    "SELECT content FROM tenant_memory WHERE tenant_id = $1"
+                )
+                .bind(tenant_id)
+                .fetch_optional(db)
+                .await
+                .ok()
+                .flatten();
+                if let Some((content,)) = row {
+                    if !content.is_empty() {
+                        sections.push(format!("## Shared Knowledge\n\n{content}"));
+                    }
+                }
+            }
+            PromptBlock::Knowledge { .. } => {
+                // Placeholder — real RAG injection happens at a higher layer
+                sections.push("[Knowledge base results will be injected here based on the user's query]".to_string());
+            }
+            PromptBlock::Delegates { agents, .. } => {
+                if !agents.is_empty() {
+                    let mut s = String::from("## Available Agents\n\nYou can delegate tasks to these agents using the `delegate` tool:\n\n");
+                    for agent in agents {
+                        s.push_str(&format!("- **{}**: {}\n  When to use: {}\n\n", agent.name, agent.description, agent.when));
+                    }
+                    sections.push(s);
+                }
+            }
+            PromptBlock::Snippet { snippet_name, .. } => {
+                let row: Option<(String,)> = sqlx::query_as(
+                    "SELECT content FROM snippets WHERE tenant_id = $1 AND name = $2"
+                )
+                .bind(tenant_id)
+                .bind(snippet_name.as_str())
+                .fetch_optional(db)
+                .await
+                .ok()
+                .flatten();
+                if let Some((content,)) = row {
+                    sections.push(content);
+                }
+            }
+            PromptBlock::Datasource { .. } => {
+                // Datasource blocks fetch external data at assembly time — placeholder for now
+                sections.push("[Datasource content would be fetched here]".to_string());
+            }
+        }
+    }
+
+    sections.join("\n\n")
 }
 
 impl AgentEngine {
@@ -531,7 +631,7 @@ impl AgentEngine {
         agent_name: &str,
     ) -> Result<AgentConfig, CasperError> {
         let row: Option<AgentConfigRow> = sqlx::query_as(
-            "SELECT deployment_slug, system_prompt, max_turns, max_tokens, temperature
+            "SELECT model_deployment, prompt_stack, config
              FROM agents
              WHERE tenant_id = $1 AND name = $2 AND is_active = true",
         )
@@ -541,13 +641,22 @@ impl AgentEngine {
         .await
         .map_err(|e| CasperError::Internal(format!("DB error loading agent config: {e}")))?;
 
-        let (deployment_slug, system_prompt, max_turns, max_tokens, temperature) =
+        let (deployment_slug, prompt_stack, config) =
             row.ok_or_else(|| {
                 CasperError::NotFound(format!("agent '{agent_name}' not found or inactive"))
             })?;
 
+        let max_turns = config.get("max_turns").and_then(|v| v.as_i64()).unwrap_or(DEFAULT_MAX_TURNS as i64) as i32;
+        let max_tokens = config.get("max_tokens").and_then(|v| v.as_i64()).unwrap_or(8192) as i32;
+        let temperature = config.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7);
+
+        // Assemble system prompt from prompt_stack blocks
+        let system_prompt = assemble_system_prompt(&prompt_stack, tenant_id, agent_name, &self.db).await;
+
         Ok(AgentConfig {
             deployment_slug,
+            prompt_stack,
+            config,
             system_prompt,
             max_turns,
             max_tokens,
