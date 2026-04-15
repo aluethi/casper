@@ -159,3 +159,13 @@
 **Dependencies added:** base64 (casper-server)
 **Notes:** API keys use csk-{UUIDv7} format with SHA-256 hash stored. Plaintext key returned only on creation. Users and API keys derive tenant_id from TenantContext (authenticated user), not from request body. Secrets stored with placeholder encryption (base64 value, nonce="none") — will be wired to Vault later. SSO client_secret stored as-is — vault encryption deferred. OIDC flow (Task 2D) not implemented yet — needs OIDC client library.
 ---
+
+## Tasks 3A-3E — Model catalog, backends, quotas, deployments
+**Status:** PASSED
+**Completed:** 2026-04-15T09:15:00Z
+**Commit:** pending
+**Summary:** Full inference configuration layer: model CRUD with all capabilities (3A), backend CRUD with api_key_enc exclusion (3B), quota management with pricing overrides (3C), tenant catalog with has_quota status (3D), deployment CRUD with validation + routing test (3E). All verified end-to-end.
+**Files changed:** casper-server/src/routes/model_routes.rs, backend_routes.rs, quota_routes.rs, catalog_routes.rs, deployment_routes.rs (all new), mod.rs, main.rs, Cargo.toml
+**Dependencies added:** bigdecimal (casper-server)
+**Notes:** NUMERIC(10,6) columns use BigDecimal for sqlx decoding, converted to f64 in JSON responses. ModelRow and CatalogRow use #[derive(sqlx::FromRow)] structs (tuples limited to 16 fields). Backend responses never include api_key_enc. Deployment creation validates: model published, quota allocated, slug unique. Deployment test endpoint resolves backend sequence using unnest with ordinality.
+---

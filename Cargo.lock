@@ -467,6 +467,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "base64",
+ "bigdecimal",
  "casper-agent",
  "casper-auth",
  "casper-base",
