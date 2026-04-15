@@ -9,6 +9,8 @@ listen:
 
 database:
   url: postgres://casper:casper@db:5432/casper
+  # In Docker, casper is the DB owner, so owner_url = url
+  owner_url: postgres://casper:casper@db:5432/casper
   main_pool_size: 20
   analytics_pool_size: 5
 

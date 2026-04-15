@@ -14,7 +14,7 @@ services:
       POSTGRES_PASSWORD: casper
       POSTGRES_DB: casper
     ports:
-      - "5432:5432"
+      - "5433:5432"  # 5433 to avoid conflict with host PostgreSQL
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

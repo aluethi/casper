@@ -1,5 +1,5 @@
 # ── Build stage ───────────────────────────────────────────────────
-FROM rust:1.84 AS builder
+FROM rust:1.94 AS builder
 
 WORKDIR /app
 
@@ -52,7 +52,7 @@ RUN cargo build --release -p casper-server
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates libssl3 && \
+    apt-get install -y --no-install-recommends ca-certificates libssl3 curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -75,7 +75,7 @@ EXPOSE 3000
 
 USER casper
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["/usr/local/bin/casper-server", "--health-check"] || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -sf http://localhost:3000/health || exit 1
 
 CMD ["casper-server"]

@@ -221,14 +221,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         async_tasks: Arc::new(DashMap::new()),
     };
 
-    // Auth middleware state
+    // Auth middleware state — uses owner pool to bypass RLS for API key lookups
     let auth_state = AuthState {
         jwt_verifier: jwt_verifier.unwrap_or_else(|| {
             // Dummy verifier for when JWT is not configured
             Arc::new(JwtVerifier::from_public_key(&[0u8; 32]).unwrap())
         }),
         revocation_cache,
-        db: main_pool,
+        db: state.db_owner.clone(),
     };
 
     // Routes that require authentication
