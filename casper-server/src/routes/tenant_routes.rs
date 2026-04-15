@@ -130,7 +130,7 @@ async fn list_tenants(
 ) -> Result<Json<PaginatedResponse<TenantResponse>>, CasperError> {
     guard.require("platform:admin")?;
 
-    let offset = (params.page - 1) * params.per_page;
+    let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tenants")
         .fetch_one(&state.db_owner)
@@ -141,7 +141,7 @@ async fn list_tenants(
             "SELECT id, slug, display_name, status, settings, created_at, updated_at
              FROM tenants ORDER BY created_at DESC LIMIT $1 OFFSET $2"
         )
-        .bind(params.per_page)
+        .bind(params.limit())
         .bind(offset)
         .fetch_all(&state.db_owner)
         .await

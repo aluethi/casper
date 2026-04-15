@@ -211,7 +211,7 @@ async fn list_deployments(
     guard.require("inference:call")?;
 
     let tenant_id = guard.0.tenant_id.0;
-    let offset = (params.page - 1) * params.per_page;
+    let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM model_deployments WHERE tenant_id = $1"
@@ -227,7 +227,7 @@ async fn list_deployments(
          ORDER BY created_at DESC LIMIT $2 OFFSET $3"
     ))
     .bind(tenant_id)
-    .bind(params.per_page)
+    .bind(params.limit())
     .bind(offset)
     .fetch_all(&state.db_owner)
     .await

@@ -154,7 +154,7 @@ async fn list_backends(
 ) -> Result<Json<PaginatedResponse<BackendResponse>>, CasperError> {
     guard.require("platform:admin")?;
 
-    let offset = (params.page - 1) * params.per_page;
+    let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM platform_backends")
         .fetch_one(&state.db_owner)
@@ -164,7 +164,7 @@ async fn list_backends(
     let rows: Vec<BackendRow> = sqlx::query_as(&format!(
         "SELECT {BACKEND_COLUMNS} FROM platform_backends ORDER BY priority, created_at DESC LIMIT $1 OFFSET $2"
     ))
-    .bind(params.per_page)
+    .bind(params.limit())
     .bind(offset)
     .fetch_all(&state.db_owner)
     .await

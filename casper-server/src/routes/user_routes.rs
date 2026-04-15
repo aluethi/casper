@@ -108,7 +108,7 @@ async fn list_users(
 ) -> Result<Json<PaginatedResponse<UserResponse>>, CasperError> {
     guard.require("users:manage")?;
 
-    let offset = (params.page - 1) * params.per_page;
+    let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tenant_users")
         .fetch_one(&state.db_owner)
@@ -119,7 +119,7 @@ async fn list_users(
         "SELECT id, tenant_id, subject, role, scopes, email, display_name, last_login_at, created_at, created_by
          FROM tenant_users ORDER BY created_at DESC LIMIT $1 OFFSET $2"
     )
-    .bind(params.per_page)
+    .bind(params.limit())
     .bind(offset)
     .fetch_all(&state.db_owner)
     .await

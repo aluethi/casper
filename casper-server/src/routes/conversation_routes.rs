@@ -96,7 +96,7 @@ async fn list_conversations(
     guard.require("agents:run")?;
 
     let tenant_id = guard.0.tenant_id.0;
-    let offset = (params.page - 1) * params.per_page;
+    let offset = (params.page.max(1) - 1) * params.per_page.clamp(1, 100);
 
     let count_sql = "SELECT COUNT(*) FROM conversations
         WHERE tenant_id = $1
@@ -128,7 +128,7 @@ async fn list_conversations(
         .bind(&params.agent_name)
         .bind(&params.status)
         .bind(&params.outcome)
-        .bind(params.per_page)
+        .bind(params.per_page.clamp(1, 100))
         .bind(offset)
         .fetch_all(&state.db_owner)
         .await

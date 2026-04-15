@@ -123,7 +123,7 @@ async fn list_api_keys(
 ) -> Result<Json<PaginatedResponse<ApiKeyResponse>>, CasperError> {
     guard.require("keys:manage")?;
 
-    let offset = (params.page - 1) * params.per_page;
+    let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM api_keys")
         .fetch_one(&state.db_owner)
@@ -134,7 +134,7 @@ async fn list_api_keys(
         "SELECT id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by
          FROM api_keys ORDER BY created_at DESC LIMIT $1 OFFSET $2"
     )
-    .bind(params.per_page)
+    .bind(params.limit())
     .bind(offset)
     .fetch_all(&state.db_owner)
     .await

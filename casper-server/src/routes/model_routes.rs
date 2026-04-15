@@ -240,7 +240,7 @@ async fn list_models(
 ) -> Result<Json<PaginatedResponse<ModelResponse>>, CasperError> {
     guard.require("platform:admin")?;
 
-    let offset = (params.page - 1) * params.per_page;
+    let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM models")
         .fetch_one(&state.db_owner)
@@ -250,7 +250,7 @@ async fn list_models(
     let rows: Vec<ModelRow> = sqlx::query_as(&format!(
         "SELECT {MODEL_COLUMNS} FROM models ORDER BY created_at DESC LIMIT $1 OFFSET $2"
     ))
-    .bind(params.per_page)
+    .bind(params.limit())
     .bind(offset)
     .fetch_all(&state.db_owner)
     .await

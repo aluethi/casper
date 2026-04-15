@@ -13,11 +13,22 @@ fn default_per_page() -> i64 { 50 }
 
 impl PaginationParams {
     pub fn offset(&self) -> i64 {
-        ((self.page.max(1)) - 1) * self.per_page.clamp(1, 100)
+        (self.page.max(1) - 1) * self.limit()
     }
 
     pub fn limit(&self) -> i64 {
         self.per_page.clamp(1, 100)
+    }
+
+    pub fn response<T: Serialize>(&self, data: Vec<T>, total: i64) -> PaginatedResponse<T> {
+        PaginatedResponse {
+            data,
+            pagination: Pagination {
+                page: self.page.max(1),
+                per_page: self.limit(),
+                total,
+            },
+        }
     }
 }
 
