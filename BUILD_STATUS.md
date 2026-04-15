@@ -179,3 +179,13 @@
 **Dependencies added:** casper-catalog added to casper-proxy deps, reqwest moved from dev to regular dep in casper-server, reqwest::Client added to AppState
 **Notes:** Anthropic adapter extracts system message separately (Anthropic format), handles cache tokens (cache_read_input_tokens, cache_creation_input_tokens). OpenAI adapter handles tool_calls and cached_tokens in prompt_tokens_details. dispatch_with_retry skips retries for non-retryable errors (400,401,403,404). Streaming not yet implemented — returns 400 if stream=true. Usage events recorded async via tokio::spawn. GET /v1/models filters by three-part scopes.
 ---
+
+## Tasks 4A-4E — Knowledge, memory, snippets
+**Status:** PASSED
+**Completed:** 2026-04-15T09:45:00Z
+**Commit:** pending
+**Summary:** Knowledge upload with chunking (4A), text search on chunks (4B placeholder — ILIKE not vector), agent memory CRUD with versioning (4C), tenant memory CRUD with versioning (4D), snippets CRUD with token estimation (4E). All verified end-to-end.
+**Files changed:** casper-server/src/routes/knowledge_routes.rs, memory_routes.rs, snippet_routes.rs (all new), mod.rs, main.rs, Cargo.toml (multipart feature)
+**Dependencies added:** axum multipart feature added to workspace
+**Notes:** Knowledge upload stores file to data/knowledge/{tenant_id}/{id}.{ext}, chunks by paragraph (~2000 chars). Search is ILIKE text search (vector search deferred until pgvector installed). Memory versioning: old version archived to history table, current updated in-place with version++. Token estimation: content.len()/4. Embeddings deferred (Task 4B) — search works via ILIKE for now.
+---

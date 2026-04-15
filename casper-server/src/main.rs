@@ -242,6 +242,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::catalog_routes::catalog_router())
         .merge(routes::deployment_routes::deployment_router())
         .merge(routes::inference_routes::inference_router())
+        .merge(routes::knowledge_routes::knowledge_router())
+        .merge(routes::memory_routes::memory_router())
+        .merge(routes::snippet_routes::snippet_router())
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             auth::auth_middleware,
