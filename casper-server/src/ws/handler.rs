@@ -93,7 +93,7 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
     )
     .await;
 
-    let (hostname, max_concurrent) = match registered {
+    let (hostname, _) = match registered {
         Ok(Ok(reg)) => reg,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "agent registration failed");
@@ -104,6 +104,19 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
             return;
         }
     };
+
+    // Load max_concurrent from backend extra_config (must happen before creating connection)
+    let extra_config: serde_json::Value = sqlx::query_scalar(
+        "SELECT extra_config FROM platform_backends WHERE id = $1"
+    )
+    .bind(backend_id)
+    .fetch_optional(&state.db_owner)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(serde_json::json!({}));
+
+    let max_concurrent = extra_config.get("max_concurrent").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
 
     let conn = Arc::new(AgentBackendConnection {
         id: connection_id,
@@ -120,23 +133,11 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
         backend_id = %backend_id,
         hostname = %hostname,
         connection_id = %connection_id,
+        max_concurrent = max_concurrent,
         "agent backend registered"
     );
 
-    // Load max_concurrent from backend extra_config (if configured server-side)
-    let extra_config: serde_json::Value = sqlx::query_scalar(
-        "SELECT extra_config FROM platform_backends WHERE id = $1"
-    )
-    .bind(backend_id)
-    .fetch_optional(&state.db_owner)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(serde_json::json!({}));
-
-    let ack_config = casper_wire::RegisterAckConfig {
-        max_concurrent: extra_config.get("max_concurrent").and_then(|v| v.as_u64()).unwrap_or(8) as u32,
-    };
+    let ack_config = casper_wire::RegisterAckConfig { max_concurrent };
 
     // Send register_ack with platform config
     let ack = serde_json::to_string(&WsMessage::RegisterAck(casper_wire::RegisterAck {
