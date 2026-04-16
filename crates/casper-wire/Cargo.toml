@@ -1,0 +1,10 @@
+[package]
+name = "casper-wire"
+version.workspace = true
+edition.workspace = true
+description = "Shared WebSocket protocol types for Casper agent backends"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }

@@ -1,91 +1,11 @@
+use casper_wire::{
+    InferenceError, InferenceMessage, InferenceResponse, InferenceUsage, Pong, Register,
+    RegisterAckConfig, WsMessage,
+};
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite;
-
-// ── Protocol messages ─────────────────────────────────────────────
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum WsMessage {
-    #[serde(rename = "register")]
-    Register {
-        hostname: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        gpu_info: Option<serde_json::Value>,
-    },
-    #[serde(rename = "register_ack")]
-    RegisterAck {
-        status: String,
-        backend_id: uuid::Uuid,
-        #[serde(default)]
-        config: RegisterAckConfig,
-    },
-    #[serde(rename = "ping")]
-    Ping { timestamp: String },
-    #[serde(rename = "pong")]
-    Pong {
-        timestamp: String,
-        active_requests: u32,
-        queue_depth: u32,
-    },
-    #[serde(rename = "inference_request")]
-    InferenceRequest {
-        id: String,
-        model: String,
-        messages: Vec<serde_json::Value>,
-        params: serde_json::Value,
-        timeout_ms: u64,
-    },
-    #[serde(rename = "inference_response")]
-    InferenceResponse {
-        id: String,
-        status: String,
-        message: InferenceMessage,
-        usage: InferenceUsage,
-        duration_ms: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        stop_reason: Option<String>,
-    },
-    #[serde(rename = "inference_error")]
-    InferenceError {
-        id: String,
-        error: String,
-        message: String,
-        retryable: bool,
-    },
-}
-
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct RegisterAckConfig {
-    #[serde(default)]
-    pub inference_base_url: Option<String>,
-    #[serde(default)]
-    pub inference_server_type: Option<String>,
-    #[serde(default)]
-    pub max_concurrent: u32,
-    #[serde(default)]
-    pub hostname: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InferenceMessage {
-    pub role: String,
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InferenceUsage {
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_tokens: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_write_tokens: Option<i32>,
-}
 
 // ── Connection ────────────────────────────────────────────────────
 
@@ -112,18 +32,17 @@ pub async fn run_connection(
 
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
-    // Send minimal registration (server already knows our backend_id from the key)
-    let register = WsMessage::Register {
+    // Send registration (server knows our backend_id from the key)
+    let register = WsMessage::Register(Register {
         hostname: gethostname(),
         gpu_info: None,
-    };
+    });
     ws_sink.send(tungstenite::Message::Text(serde_json::to_string(&register)?.into())).await?;
-    tracing::info!("registration sent, waiting for config from server...");
+    tracing::info!("registration sent, waiting for ack...");
 
     // Wait for RegisterAck with server-pushed config
     let server_config = wait_for_ack(&mut ws_source).await?;
 
-    // Inference URL is local config — the server doesn't know about it
     let inference_base_url = inference_url.to_string();
     let max_concurrent = if server_config.max_concurrent > 0 { server_config.max_concurrent } else { 8 };
 
@@ -152,19 +71,19 @@ pub async fn run_connection(
 
         match parsed {
             WsMessage::Ping { timestamp } => {
-                let pong = WsMessage::Pong {
+                let pong = WsMessage::Pong(Pong {
                     timestamp,
                     active_requests: active_requests.load(Ordering::Relaxed),
                     queue_depth: 0,
-                };
+                });
                 ws_sink.send(tungstenite::Message::Text(serde_json::to_string(&pong)?.into())).await?;
             }
-            WsMessage::InferenceRequest { id, model, messages, params, timeout_ms } => {
+            WsMessage::InferenceRequest(req) => {
                 let client = http_client.clone();
                 let base_url = inference_base_url.clone();
-                let srv_type = "openai_compatible".to_string();
                 let active = Arc::clone(&active_requests);
                 let sem = Arc::clone(&semaphore);
+                let req_id = req.id.clone();
 
                 let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel::<String>(1);
 
@@ -173,13 +92,18 @@ pub async fn run_connection(
                     active.fetch_add(1, Ordering::Relaxed);
                     let start = std::time::Instant::now();
 
-                    let result = dispatch_local(&client, &base_url, &srv_type, &model, &messages, &params, timeout_ms).await;
+                    let result = dispatch_local(&client, &base_url, &req.model, &req.messages, &req.params, req.timeout_ms).await;
                     let duration_ms = start.elapsed().as_millis() as u64;
                     active.fetch_sub(1, Ordering::Relaxed);
 
                     let response_msg = match result {
-                        Ok((msg, usage, stop_reason)) => WsMessage::InferenceResponse { id, status: "ok".to_string(), message: msg, usage, duration_ms, stop_reason },
-                        Err(e) => WsMessage::InferenceError { id, error: "dispatch_error".to_string(), message: format!("{e}"), retryable: true },
+                        Ok((msg, usage, stop_reason)) => WsMessage::InferenceResponse(InferenceResponse {
+                            id: req_id, status: "ok".to_string(), message: Some(msg), usage: Some(usage),
+                            duration_ms: Some(duration_ms), stop_reason,
+                        }),
+                        Err(e) => WsMessage::InferenceError(InferenceError {
+                            id: req_id, error: "dispatch_error".to_string(), message: Some(format!("{e}")), retryable: true,
+                        }),
                     };
 
                     if let Ok(text) = serde_json::to_string(&response_msg) {
@@ -204,11 +128,11 @@ async fn wait_for_ack(
     let timeout = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while let Some(msg) = ws_source.next().await {
             if let Ok(tungstenite::Message::Text(text)) = msg {
-                if let Ok(WsMessage::RegisterAck { status, config, .. }) = serde_json::from_str(&text.to_string()) {
-                    if status == "ok" {
-                        return Ok(config);
+                if let Ok(WsMessage::RegisterAck(ack)) = serde_json::from_str(&text.to_string()) {
+                    if ack.status == "ok" {
+                        return Ok(ack.config);
                     }
-                    return Err(format!("registration rejected: {status}").into());
+                    return Err(format!("registration rejected: {}", ack.status).into());
                 }
             }
         }
@@ -224,7 +148,7 @@ async fn wait_for_ack(
 // ── Local dispatch ───────────────────────────────────────────────
 
 async fn dispatch_local(
-    client: &reqwest::Client, base_url: &str, _server_type: &str,
+    client: &reqwest::Client, base_url: &str,
     model: &str, messages: &[serde_json::Value], params: &serde_json::Value, timeout_ms: u64,
 ) -> Result<(InferenceMessage, InferenceUsage, Option<String>), Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));

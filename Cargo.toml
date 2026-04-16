@@ -12,6 +12,7 @@ members = [
     "crates/casper-agent",
     "casper-server",
     "casper-cli",
+    "crates/casper-wire",
     "casper-agent-backend",
 ]
 
@@ -98,3 +99,4 @@ casper-catalog = { path = "crates/casper-catalog" }
 casper-proxy = { path = "crates/casper-proxy" }
 casper-mcp = { path = "crates/casper-mcp" }
 casper-agent = { path = "crates/casper-agent" }
+casper-wire = { path = "crates/casper-wire" }

@@ -339,6 +339,7 @@ dependencies = [
 name = "casper-agent-backend"
 version = "0.1.0"
 dependencies = [
+ "casper-wire",
  "chrono",
  "clap",
  "futures",
@@ -493,6 +494,7 @@ dependencies = [
  "casper-observe",
  "casper-proxy",
  "casper-vault",
+ "casper-wire",
  "dashmap",
  "futures",
  "hex",
@@ -529,6 +531,15 @@ dependencies = [
  "tracing",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "casper-wire"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

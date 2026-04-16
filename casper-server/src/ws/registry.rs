@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use super::protocol::{InferenceResponseMessage, InferenceUsage, WsMessage};
+use casper_wire::{WsMessage, InferenceMessage};
 
 // ── Agent Backend Connection ──────────────────────────────────────
 
@@ -107,7 +107,7 @@ impl AgentBackendRegistry {
         conn.pending_requests.insert(request_id.clone(), tx);
 
         // Build the WS inference request
-        let ws_req = WsMessage::InferenceRequest {
+        let ws_req = WsMessage::InferenceRequest(casper_wire::InferenceRequest {
             id: request_id.clone(),
             model: request.model.clone(),
             messages: request
@@ -121,7 +121,7 @@ impl AgentBackendRegistry {
                 "stream": false,
             }),
             timeout_ms,
-        };
+        });
 
         let msg_text = serde_json::to_string(&ws_req).map_err(|e| {
             CasperError::Internal(format!("failed to serialize ws request: {e}"))
@@ -158,23 +158,13 @@ impl AgentBackendRegistry {
         self.metrics.agent_backend_request_duration.observe(elapsed);
 
         match result {
-            Ok(Ok(WsMessage::InferenceResponse {
-                message,
-                usage,
-                stop_reason,
-                ..
-            })) => {
-                let msg = message.unwrap_or(InferenceResponseMessage {
+            Ok(Ok(WsMessage::InferenceResponse(resp))) => {
+                let msg = resp.message.unwrap_or(InferenceMessage {
                     role: "assistant".to_string(),
                     content: None,
                     tool_calls: None,
                 });
-                let usage = usage.unwrap_or(InferenceUsage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_read_tokens: None,
-                    cache_write_tokens: None,
-                });
+                let usage = resp.usage.unwrap_or_default();
 
                 let role: MessageRole = serde_json::from_value(
                     serde_json::Value::String(msg.role),
@@ -189,15 +179,13 @@ impl AgentBackendRegistry {
                     cache_read_tokens: usage.cache_read_tokens,
                     cache_write_tokens: usage.cache_write_tokens,
                     tool_calls: msg.tool_calls,
-                    finish_reason: stop_reason.or(Some("stop".to_string())),
+                    finish_reason: resp.stop_reason.or(Some("stop".to_string())),
                 })
             }
-            Ok(Ok(WsMessage::InferenceError {
-                error,
-                message,
-                retryable,
-                ..
-            })) => {
+            Ok(Ok(WsMessage::InferenceError(err))) => {
+                let error = err.error;
+                let message = err.message;
+                let retryable = err.retryable;
                 self.metrics
                     .agent_backend_errors
                     .with_label_values(&[&bid_str, &error])

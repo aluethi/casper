@@ -134,17 +134,16 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
     .flatten()
     .unwrap_or(serde_json::json!({}));
 
-    let ack_config = super::protocol::RegisterAckConfig {
-        max_concurrent: extra_config.get("max_concurrent").and_then(|v| v.as_u64()).unwrap_or(max_concurrent as u64) as u32,
-        hostname: Some(hostname.clone()),
+    let ack_config = casper_wire::RegisterAckConfig {
+        max_concurrent: extra_config.get("max_concurrent").and_then(|v| v.as_u64()).unwrap_or(8) as u32,
     };
 
-    // Send register_ack with platform config (no inference URLs — that's sidecar-local)
-    let ack = serde_json::to_string(&WsMessage::RegisterAck {
+    // Send register_ack with platform config
+    let ack = serde_json::to_string(&WsMessage::RegisterAck(casper_wire::RegisterAck {
         status: "ok".to_string(),
         backend_id,
         config: ack_config,
-    }).unwrap();
+    })).unwrap();
     let _ = send_text(&mut ws_sink, &ack).await;
 
     // Audit connect
@@ -196,12 +195,12 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
 
         match recv {
             Ok(Some(Ok(text))) => match serde_json::from_str::<WsMessage>(&text) {
-                Ok(WsMessage::Pong { .. }) => { /* heartbeat OK */ }
-                Ok(msg @ WsMessage::InferenceResponse { .. })
-                | Ok(msg @ WsMessage::InferenceError { .. }) => {
+                Ok(WsMessage::Pong(_)) => { /* heartbeat OK */ }
+                Ok(msg @ WsMessage::InferenceResponse(_))
+                | Ok(msg @ WsMessage::InferenceError(_)) => {
                     let req_id = match &msg {
-                        WsMessage::InferenceResponse { id, .. } => id.clone(),
-                        WsMessage::InferenceError { id, .. } => id.clone(),
+                        WsMessage::InferenceResponse(r) => r.id.clone(),
+                        WsMessage::InferenceError(e) => e.id.clone(),
                         _ => unreachable!(),
                     };
                     if let Some((_, tx)) = conn_recv.pending_requests.remove(&req_id) {
@@ -272,18 +271,11 @@ async fn wait_for_registration(
                     CasperError::BadRequest(format!("invalid registration message: {e}"))
                 })?;
                 match parsed {
-                    WsMessage::Register {
-                        backend_id,
-                        hostname,
-                        max_concurrent,
-                        ..
-                    } => {
-                        if backend_id != expected_backend_id {
-                            return Err(CasperError::Forbidden(
-                                "backend_id does not match authenticated key".into(),
-                            ));
-                        }
-                        return Ok((hostname, max_concurrent));
+                    WsMessage::Register(reg) => {
+                        // Server already knows backend_id from key auth —
+                        // the sidecar just sends its hostname.
+                        let _ = expected_backend_id; // used by auth, not needed here
+                        return Ok((reg.hostname, 0)); // max_concurrent comes from extra_config
                     }
                     _ => {
                         return Err(CasperError::BadRequest(

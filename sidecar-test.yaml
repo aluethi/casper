@@ -1,0 +1,4 @@
+casper_url: ws://localhost:3001/agent/connect
+backends:
+  - key: csa-019d94978a387c2290ae7ac2eeb418ac
+    inference_url: https://cortex.arc126.io
