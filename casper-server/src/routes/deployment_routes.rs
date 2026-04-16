@@ -4,318 +4,54 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
-use casper_db::TenantDb;
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-use crate::helpers::to_rfc3339;
-use crate::pagination::{PaginationParams, PaginatedResponse, Pagination};
-
-// ── Request / Response types ───────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct CreateDeploymentRequest {
-    pub model_id: Uuid,
-    pub name: String,
-    pub slug: String,
-    #[serde(default)]
-    pub backend_sequence: Vec<Uuid>,
-    #[serde(default = "default_retry_attempts")]
-    pub retry_attempts: i32,
-    #[serde(default = "default_retry_backoff_ms")]
-    pub retry_backoff_ms: i32,
-    #[serde(default = "default_true")]
-    pub fallback_enabled: bool,
-    #[serde(default = "default_timeout_ms")]
-    pub timeout_ms: i32,
-    #[serde(default = "default_json_obj")]
-    pub default_params: serde_json::Value,
-    pub rate_limit_rpm: Option<i32>,
-}
-
-fn default_retry_attempts() -> i32 { 1 }
-fn default_retry_backoff_ms() -> i32 { 1000 }
-fn default_true() -> bool { true }
-fn default_timeout_ms() -> i32 { 30000 }
-fn default_json_obj() -> serde_json::Value { serde_json::json!({}) }
-
-#[derive(Deserialize)]
-pub struct UpdateDeploymentRequest {
-    pub name: Option<String>,
-    pub slug: Option<String>,
-    pub backend_sequence: Option<Vec<Uuid>>,
-    pub retry_attempts: Option<i32>,
-    pub retry_backoff_ms: Option<i32>,
-    pub fallback_enabled: Option<bool>,
-    pub timeout_ms: Option<i32>,
-    pub default_params: Option<serde_json::Value>,
-    pub rate_limit_rpm: Option<i32>,
-}
-
-#[derive(Serialize)]
-pub struct DeploymentResponse {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub model_id: Uuid,
-    pub name: String,
-    pub slug: String,
-    pub backend_sequence: Vec<Uuid>,
-    pub retry_attempts: i32,
-    pub retry_backoff_ms: i32,
-    pub fallback_enabled: bool,
-    pub timeout_ms: i32,
-    pub default_params: serde_json::Value,
-    pub rate_limit_rpm: Option<i32>,
-    pub is_active: bool,
-    pub created_at: String,
-}
-
-#[derive(sqlx::FromRow)]
-struct DeploymentRow {
-    id: Uuid,
-    tenant_id: Uuid,
-    model_id: Uuid,
-    name: String,
-    slug: String,
-    backend_sequence: Vec<Uuid>,
-    retry_attempts: i32,
-    retry_backoff_ms: i32,
-    fallback_enabled: bool,
-    timeout_ms: i32,
-    default_params: serde_json::Value,
-    rate_limit_rpm: Option<i32>,
-    is_active: bool,
-    created_at: OffsetDateTime,
-}
-
-fn row_to_response(r: DeploymentRow) -> DeploymentResponse {
-    DeploymentResponse {
-        id: r.id,
-        tenant_id: r.tenant_id,
-        model_id: r.model_id,
-        name: r.name,
-        slug: r.slug,
-        backend_sequence: r.backend_sequence,
-        retry_attempts: r.retry_attempts,
-        retry_backoff_ms: r.retry_backoff_ms,
-        fallback_enabled: r.fallback_enabled,
-        timeout_ms: r.timeout_ms,
-        default_params: r.default_params,
-        rate_limit_rpm: r.rate_limit_rpm,
-        is_active: r.is_active,
-        created_at: to_rfc3339(r.created_at),
-    }
-}
-
-const DEPLOYMENT_COLUMNS: &str =
-    "id, tenant_id, model_id, name, slug, \
-     backend_sequence, retry_attempts, retry_backoff_ms, fallback_enabled, timeout_ms, \
-     default_params, rate_limit_rpm, is_active, created_at";
-
-#[derive(Serialize)]
-pub struct TestRouteResponse {
-    pub deployment_id: Uuid,
-    pub model_id: Uuid,
-    pub backends: Vec<ResolvedBackend>,
-}
-
-#[derive(Serialize)]
-pub struct ResolvedBackend {
-    pub backend_id: Uuid,
-    pub name: String,
-    pub provider: String,
-    pub base_url: Option<String>,
-    pub priority: i32,
-}
-
-#[derive(sqlx::FromRow)]
-struct DeploymentTestRow {
-    model_id: Uuid,
-    backend_sequence: Vec<Uuid>,
-}
-
-#[derive(sqlx::FromRow)]
-struct ResolvedBackendRow {
-    id: Uuid,
-    name: String,
-    provider: String,
-    base_url: Option<String>,
-    priority: i32,
-}
+use crate::pagination::PaginationParams;
+use crate::services::deployment_service::{
+    self, CreateDeploymentRequest, DeploymentResponse, TestRouteResponse, UpdateDeploymentRequest,
+};
 
 // ── Handlers ───────────────────────────────────────────────────────
 
-/// POST /api/v1/deployments — Create deployment.
+/// POST /api/v1/deployments -- Create deployment.
 async fn create_deployment(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Json(body): Json<CreateDeploymentRequest>,
 ) -> Result<Json<DeploymentResponse>, CasperError> {
     guard.require("config:manage")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    // Validate model exists and is published (models table has no RLS)
-    let model_check: Option<(bool, bool)> = sqlx::query_as(
-        "SELECT published, is_active FROM models WHERE id = $1"
-    )
-    .bind(body.model_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    match model_check {
-        None => return Err(CasperError::NotFound(format!("model {}", body.model_id))),
-        Some((published, is_active)) => {
-            if !published || !is_active {
-                return Err(CasperError::BadRequest(
-                    "model is not published or not active".into(),
-                ));
-            }
-        }
-    }
-
-    // Validate quota exists for this tenant + model
-    let has_quota: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM model_quotas WHERE tenant_id = $1 AND model_id = $2)"
-    )
-    .bind(tenant_id.0)
-    .bind(body.model_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    if !has_quota {
-        return Err(CasperError::BadRequest(
-            "no quota allocated for this model".into(),
-        ));
-    }
-
-    let id = Uuid::now_v7();
-
-    let row: DeploymentRow = sqlx::query_as(&format!(
-        "INSERT INTO model_deployments (
-            id, tenant_id, model_id, name, slug,
-            backend_sequence, retry_attempts, retry_backoff_ms, fallback_enabled, timeout_ms,
-            default_params, rate_limit_rpm
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         RETURNING {DEPLOYMENT_COLUMNS}"
-    ))
-    .bind(id)
-    .bind(tenant_id.0)
-    .bind(body.model_id)
-    .bind(&body.name)
-    .bind(&body.slug)
-    .bind(&body.backend_sequence)
-    .bind(body.retry_attempts)
-    .bind(body.retry_backoff_ms)
-    .bind(body.fallback_enabled)
-    .bind(body.timeout_ms)
-    .bind(&body.default_params)
-    .bind(body.rate_limit_rpm)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err)
-            if db_err.constraint() == Some("model_deployments_tenant_id_slug_key") =>
-        {
-            CasperError::Conflict(format!("deployment slug '{}' already exists", body.slug))
-        }
-        _ => CasperError::Internal(format!("DB error: {e}")),
-    })?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    Ok(Json(row_to_response(row)))
+    let dep = deployment_service::create(&state.db, tenant_id, &body).await?;
+    Ok(Json(dep))
 }
 
-/// GET /api/v1/deployments — List deployments for tenant.
+/// GET /api/v1/deployments -- List deployments for tenant.
 async fn list_deployments(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<PaginatedResponse<DeploymentResponse>>, CasperError> {
+) -> Result<Json<crate::pagination::PaginatedResponse<DeploymentResponse>>, CasperError> {
     guard.require("inference:call")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let offset = params.offset();
-
-    let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM model_deployments WHERE tenant_id = $1"
-    )
-    .bind(tenant_id.0)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let rows: Vec<DeploymentRow> = sqlx::query_as(&format!(
-        "SELECT {DEPLOYMENT_COLUMNS} FROM model_deployments
-         WHERE tenant_id = $1
-         ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-    ))
-    .bind(tenant_id.0)
-    .bind(params.limit())
-    .bind(offset)
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let data = rows.into_iter().map(row_to_response).collect();
-
-    Ok(Json(PaginatedResponse {
-        data,
-        pagination: Pagination {
-            page: params.page,
-            per_page: params.per_page,
-            total: total.0,
-        },
-    }))
+    let result = deployment_service::list(&state.db, tenant_id, &params).await?;
+    Ok(Json(result))
 }
 
-/// GET /api/v1/deployments/:id — Get single deployment.
+/// GET /api/v1/deployments/:id -- Get single deployment.
 async fn get_deployment(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeploymentResponse>, CasperError> {
     guard.require("inference:call")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let row: Option<DeploymentRow> = sqlx::query_as(&format!(
-        "SELECT {DEPLOYMENT_COLUMNS} FROM model_deployments WHERE id = $1 AND tenant_id = $2"
-    ))
-    .bind(id)
-    .bind(tenant_id.0)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("deployment {id}")))?;
-    Ok(Json(row_to_response(r)))
+    let dep = deployment_service::get(&state.db, tenant_id, id).await?;
+    Ok(Json(dep))
 }
 
-/// PATCH /api/v1/deployments/:id — Update deployment.
+/// PATCH /api/v1/deployments/:id -- Update deployment.
 async fn update_deployment(
     State(state): State<AppState>,
     guard: ScopeGuard,
@@ -323,166 +59,33 @@ async fn update_deployment(
     Json(body): Json<UpdateDeploymentRequest>,
 ) -> Result<Json<DeploymentResponse>, CasperError> {
     guard.require("config:manage")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let row: Option<DeploymentRow> = sqlx::query_as(&format!(
-        "UPDATE model_deployments SET
-            name                = COALESCE($3, name),
-            slug                = COALESCE($4, slug),
-            backend_sequence    = COALESCE($5, backend_sequence),
-            retry_attempts      = COALESCE($6, retry_attempts),
-            retry_backoff_ms    = COALESCE($7, retry_backoff_ms),
-            fallback_enabled    = COALESCE($8, fallback_enabled),
-            timeout_ms          = COALESCE($9, timeout_ms),
-            default_params      = COALESCE($10, default_params),
-            rate_limit_rpm      = COALESCE($11, rate_limit_rpm)
-         WHERE id = $1 AND tenant_id = $2
-         RETURNING {DEPLOYMENT_COLUMNS}"
-    ))
-    .bind(id)
-    .bind(tenant_id.0)
-    .bind(&body.name)
-    .bind(&body.slug)
-    .bind(&body.backend_sequence)
-    .bind(body.retry_attempts)
-    .bind(body.retry_backoff_ms)
-    .bind(body.fallback_enabled)
-    .bind(body.timeout_ms)
-    .bind(&body.default_params)
-    .bind(body.rate_limit_rpm)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err)
-            if db_err.constraint() == Some("model_deployments_tenant_id_slug_key") =>
-        {
-            CasperError::Conflict("deployment slug already exists".into())
-        }
-        _ => CasperError::Internal(format!("DB error: {e}")),
-    })?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("deployment {id}")))?;
-    Ok(Json(row_to_response(r)))
+    let dep = deployment_service::update(&state.db, tenant_id, id, &body).await?;
+    Ok(Json(dep))
 }
 
-/// DELETE /api/v1/deployments/:id — Soft delete (is_active=false).
+/// DELETE /api/v1/deployments/:id -- Soft delete (is_active=false).
 async fn delete_deployment(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DeploymentResponse>, CasperError> {
     guard.require("config:manage")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let row: Option<DeploymentRow> = sqlx::query_as(&format!(
-        "UPDATE model_deployments SET is_active = false
-         WHERE id = $1 AND tenant_id = $2
-         RETURNING {DEPLOYMENT_COLUMNS}"
-    ))
-    .bind(id)
-    .bind(tenant_id.0)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("deployment {id}")))?;
-    Ok(Json(row_to_response(r)))
+    let dep = deployment_service::delete(&state.db, tenant_id, id).await?;
+    Ok(Json(dep))
 }
 
-/// POST /api/v1/deployments/:id/test — Dry-run: resolve routing.
+/// POST /api/v1/deployments/:id/test -- Dry-run: resolve routing.
 async fn test_deployment(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TestRouteResponse>, CasperError> {
     guard.require("inference:call")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    // Fetch the deployment
-    let dep: Option<DeploymentTestRow> = sqlx::query_as(
-        "SELECT model_id, backend_sequence FROM model_deployments
-         WHERE id = $1 AND tenant_id = $2 AND is_active = true"
-    )
-    .bind(id)
-    .bind(tenant_id.0)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let dep = dep.ok_or_else(|| {
-        CasperError::NotFound(format!("active deployment {id}"))
-    })?;
-    let model_id = dep.model_id;
-    let backend_sequence = dep.backend_sequence;
-
-    // Resolve backends: if backend_sequence is specified, use those in order;
-    // otherwise fall back to platform_backend_models for the model.
-    // Note: platform_backends has no RLS, but querying it via the casper user is fine.
-    let backends: Vec<ResolvedBackendRow> = if backend_sequence.is_empty() {
-        sqlx::query_as(
-            "SELECT pb.id, pb.name, pb.provider, pb.base_url, pbm.priority
-             FROM platform_backend_models pbm
-             JOIN platform_backends pb ON pb.id = pbm.backend_id
-             WHERE pbm.model_id = $1 AND pb.is_active = true
-             ORDER BY pbm.priority"
-        )
-        .bind(model_id)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
-    } else {
-        // Fetch in the order specified by backend_sequence.
-        // Use unnest to preserve ordering.
-        sqlx::query_as(
-            "SELECT pb.id, pb.name, pb.provider, pb.base_url, s.ord::INT AS priority
-             FROM unnest($1::UUID[]) WITH ORDINALITY AS s(backend_id, ord)
-             JOIN platform_backends pb ON pb.id = s.backend_id
-             WHERE pb.is_active = true
-             ORDER BY s.ord"
-        )
-        .bind(&backend_sequence)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
-    };
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let resolved = backends
-        .into_iter()
-        .map(|r| ResolvedBackend {
-            backend_id: r.id,
-            name: r.name,
-            provider: r.provider,
-            base_url: r.base_url,
-            priority: r.priority,
-        })
-        .collect();
-
-    Ok(Json(TestRouteResponse {
-        deployment_id: id,
-        model_id,
-        backends: resolved,
-    }))
+    let result = deployment_service::test_route(&state.db, tenant_id, id).await?;
+    Ok(Json(result))
 }
 
 // ── Router ─────────────────────────────────────────────────────────

@@ -4,122 +4,49 @@ use axum::{
     routing::post,
 };
 use casper_base::{CasperError, TenantId};
-use casper_db::TenantDb;
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-use crate::helpers::to_rfc3339;
+use crate::services::secret_service::{self, SecretKeyResponse, SetSecretRequest};
 
-#[derive(Deserialize)]
-pub struct SetSecretRequest {
-    pub key: String,
-    pub value: String,
-}
+// ── Handlers ────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-pub struct SecretKeyResponse {
-    pub key: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(sqlx::FromRow)]
-struct SecretKeyRow {
-    key: String,
-    created_at: OffsetDateTime,
-    updated_at: OffsetDateTime,
-}
-
-fn row_to_response(r: SecretKeyRow) -> SecretKeyResponse {
-    SecretKeyResponse {
-        key: r.key,
-        created_at: to_rfc3339(r.created_at),
-        updated_at: to_rfc3339(r.updated_at),
-    }
-}
-
-/// POST /api/v1/secrets — Set (upsert) a secret with AES-256-GCM encryption.
+/// POST /api/v1/secrets -- Set (upsert) a secret with AES-256-GCM encryption.
 async fn set_secret(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Json(body): Json<SetSecretRequest>,
 ) -> Result<Json<SecretKeyResponse>, CasperError> {
     guard.require("secrets:write")?;
-
     let tenant_id = TenantId(guard.0.tenant_id.0);
-
-    // Encrypt via Vault (HKDF per-tenant key derivation + AES-256-GCM)
-    // Vault.set uses its own query with tenant_id in the WHERE clause
-    state.vault.set(&state.db_owner, tenant_id, &body.key, body.value.as_bytes()).await?;
-
-    // Fetch the row back for timestamps via RLS-scoped connection
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let row: SecretKeyRow = sqlx::query_as(
-        "SELECT key, created_at, updated_at FROM tenant_secrets WHERE tenant_id = $1 AND key = $2"
-    )
-    .bind(tenant_id.0)
-    .bind(&body.key)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    Ok(Json(row_to_response(row)))
+    let result = secret_service::set(&state.db, &state.db_owner, &state.vault, tenant_id, &body).await?;
+    Ok(Json(result))
 }
 
-/// GET /api/v1/secrets — List secret keys only (never values).
+/// GET /api/v1/secrets -- List secret keys only (never values).
 async fn list_secrets(
     State(state): State<AppState>,
     guard: ScopeGuard,
 ) -> Result<Json<Vec<SecretKeyResponse>>, CasperError> {
     guard.require("secrets:read")?;
-
     let tenant_id = TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let rows: Vec<SecretKeyRow> = sqlx::query_as(
-        "SELECT key, created_at, updated_at
-         FROM tenant_secrets WHERE tenant_id = $1
-         ORDER BY key"
-    )
-    .bind(tenant_id.0)
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let data = rows.into_iter().map(row_to_response).collect();
-    Ok(Json(data))
+    let result = secret_service::list(&state.db, tenant_id).await?;
+    Ok(Json(result))
 }
 
-/// DELETE /api/v1/secrets/:key — Delete a secret.
+/// DELETE /api/v1/secrets/:key -- Delete a secret.
 async fn delete_secret(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, CasperError> {
     guard.require("secrets:write")?;
-
     let tenant_id = TenantId(guard.0.tenant_id.0);
-    let deleted = state.vault.delete(&state.db_owner, tenant_id, &key).await?;
-
-    if !deleted {
-        return Err(CasperError::NotFound(format!("secret '{key}'")));
-    }
-
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    let result = secret_service::delete(&state.db_owner, &state.vault, tenant_id, &key).await?;
+    Ok(Json(result))
 }
+
+// ── Router ────────────────────────────────────────────────────────
 
 pub fn secret_router() -> Router<AppState> {
     Router::new()

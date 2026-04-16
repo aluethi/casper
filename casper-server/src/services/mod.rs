@@ -1,3 +1,16 @@
 pub mod agent_service;
+pub mod apikey_service;
+pub mod backend_service;
+pub mod conversation_service;
+pub mod deployment_service;
+pub mod feedback_service;
+pub mod inference_service;
 pub mod knowledge_service;
 pub mod memory_service;
+pub mod model_service;
+pub mod quota_service;
+pub mod run_service;
+pub mod secret_service;
+pub mod snippet_service;
+pub mod training_service;
+pub mod user_service;
