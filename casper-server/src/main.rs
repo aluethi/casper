@@ -3,6 +3,7 @@ mod config;
 pub mod helpers;
 pub mod pagination;
 mod routes;
+pub mod services;
 pub mod ws;
 
 use std::sync::Arc;

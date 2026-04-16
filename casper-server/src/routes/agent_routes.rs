@@ -6,67 +6,13 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
-use casper_db::TenantDb;
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
-use uuid::Uuid;
+use serde::Deserialize;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-use crate::helpers::to_rfc3339;
+use crate::services::agent_service::{self, AgentResponse, CreateAgentRequest, UpdateAgentRequest};
 
-// ── Request / Response types ──────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct CreateAgentRequest {
-    pub name: String,
-    pub display_name: String,
-    pub description: Option<String>,
-    pub model_deployment: String,
-    #[serde(default = "default_json_array")]
-    pub prompt_stack: serde_json::Value,
-    #[serde(default = "default_json_obj")]
-    pub tools: serde_json::Value,
-    #[serde(default = "default_json_obj")]
-    pub config: serde_json::Value,
-}
-
-fn default_json_array() -> serde_json::Value { serde_json::json!([]) }
-fn default_json_obj() -> serde_json::Value { serde_json::json!({}) }
-
-#[derive(Deserialize)]
-pub struct UpdateAgentRequest {
-    pub display_name: Option<String>,
-    pub description: Option<String>,
-    pub model_deployment: Option<String>,
-    pub prompt_stack: Option<serde_json::Value>,
-    pub tools: Option<serde_json::Value>,
-    pub config: Option<serde_json::Value>,
-}
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct AgentResponse {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub name: String,
-    pub display_name: String,
-    pub description: Option<String>,
-    pub model_deployment: String,
-    pub prompt_stack: serde_json::Value,
-    pub tools: serde_json::Value,
-    pub config: serde_json::Value,
-    pub version: i32,
-    pub is_active: bool,
-    #[serde(serialize_with = "serialize_dt")]
-    pub created_at: OffsetDateTime,
-    #[serde(serialize_with = "serialize_dt")]
-    pub updated_at: OffsetDateTime,
-    pub created_by: String,
-}
-
-fn serialize_dt<S: serde::Serializer>(dt: &OffsetDateTime, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&to_rfc3339(*dt))
-}
+// ── Route-specific types ─────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct ListAgentsParams {
@@ -74,7 +20,7 @@ pub struct ListAgentsParams {
     pub include_inactive: bool,
 }
 
-// ── Handlers ──────────────────────────────────────────────────────
+// ── Handlers ─────────────────────────────────────────────────────
 
 /// POST /api/v1/agents -- Create agent.
 async fn create_agent(
@@ -83,65 +29,9 @@ async fn create_agent(
     Json(body): Json<CreateAgentRequest>,
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:manage")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    // Validate model_deployment references an active deployment for this tenant
-    let deployment_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-            SELECT 1 FROM model_deployments
-            WHERE tenant_id = $1 AND slug = $2 AND is_active = true
-        )"
-    )
-    .bind(tenant_id.0)
-    .bind(&body.model_deployment)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    if !deployment_exists {
-        return Err(CasperError::BadRequest(format!(
-            "model deployment '{}' not found or inactive for this tenant",
-            body.model_deployment
-        )));
-    }
-
-    let id = Uuid::now_v7();
-
-    let row: AgentResponse = sqlx::query_as(
-        "INSERT INTO agents (id, tenant_id, name, display_name, description, model_deployment, prompt_stack, tools, config, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING id, tenant_id, name, display_name, description, model_deployment,
-                   prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by"
-    )
-    .bind(id)
-    .bind(tenant_id.0)
-    .bind(&body.name)
-    .bind(&body.display_name)
-    .bind(&body.description)
-    .bind(&body.model_deployment)
-    .bind(&body.prompt_stack)
-    .bind(&body.tools)
-    .bind(&body.config)
-    .bind(guard.0.actor())
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err)
-            if db_err.constraint() == Some("agents_tenant_id_name_key") =>
-        {
-            CasperError::Conflict(format!("agent '{}' already exists", body.name))
-        }
-        _ => CasperError::Internal(format!("DB error: {e}")),
-    })?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    Ok(Json(row))
+    let agent = agent_service::create(&state.db, tenant_id, &body, &guard.0.actor()).await?;
+    Ok(Json(agent))
 }
 
 /// GET /api/v1/agents -- List agents for tenant.
@@ -151,40 +41,9 @@ async fn list_agents(
     Query(params): Query<ListAgentsParams>,
 ) -> Result<Json<Vec<AgentResponse>>, CasperError> {
     guard.require("agents:run")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let rows: Vec<AgentResponse> = if params.include_inactive {
-        sqlx::query_as(
-            "SELECT id, tenant_id, name, display_name, description, model_deployment,
-                    prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by
-             FROM agents WHERE tenant_id = $1
-             ORDER BY name"
-        )
-        .bind(tenant_id.0)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
-    } else {
-        sqlx::query_as(
-            "SELECT id, tenant_id, name, display_name, description, model_deployment,
-                    prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by
-             FROM agents WHERE tenant_id = $1 AND is_active = true
-             ORDER BY name"
-        )
-        .bind(tenant_id.0)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
-    };
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    Ok(Json(rows))
+    let agents = agent_service::list(&state.db, tenant_id, params.include_inactive).await?;
+    Ok(Json(agents))
 }
 
 /// GET /api/v1/agents/:name -- Get agent by name.
@@ -194,28 +53,9 @@ async fn get_agent(
     Path(name): Path<String>,
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:run")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let row: Option<AgentResponse> = sqlx::query_as(
-        "SELECT id, tenant_id, name, display_name, description, model_deployment,
-                prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by
-         FROM agents WHERE tenant_id = $1 AND name = $2"
-    )
-    .bind(tenant_id.0)
-    .bind(&name)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
-    Ok(Json(r))
+    let agent = agent_service::get_by_name(&state.db, tenant_id, &name).await?;
+    Ok(Json(agent))
 }
 
 /// PATCH /api/v1/agents/:name -- Update agent. Increments version.
@@ -226,64 +66,9 @@ async fn update_agent(
     Json(body): Json<UpdateAgentRequest>,
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:manage")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    // If model_deployment is being updated, validate it
-    if let Some(ref slug) = body.model_deployment {
-        let deployment_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM model_deployments
-                WHERE tenant_id = $1 AND slug = $2 AND is_active = true
-            )"
-        )
-        .bind(tenant_id.0)
-        .bind(slug)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-        if !deployment_exists {
-            return Err(CasperError::BadRequest(format!(
-                "model deployment '{slug}' not found or inactive for this tenant"
-            )));
-        }
-    }
-
-    let row: Option<AgentResponse> = sqlx::query_as(
-        "UPDATE agents SET
-            display_name     = COALESCE($3, display_name),
-            description      = COALESCE($4, description),
-            model_deployment = COALESCE($5, model_deployment),
-            prompt_stack     = COALESCE($6, prompt_stack),
-            tools            = COALESCE($7, tools),
-            config           = COALESCE($8, config),
-            version          = version + 1,
-            updated_at       = now()
-         WHERE tenant_id = $1 AND name = $2 AND is_active = true
-         RETURNING id, tenant_id, name, display_name, description, model_deployment,
-                   prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by"
-    )
-    .bind(tenant_id.0)
-    .bind(&name)
-    .bind(&body.display_name)
-    .bind(&body.description)
-    .bind(&body.model_deployment)
-    .bind(&body.prompt_stack)
-    .bind(&body.tools)
-    .bind(&body.config)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
-    Ok(Json(r))
+    let agent = agent_service::update(&state.db, tenant_id, &name, &body).await?;
+    Ok(Json(agent))
 }
 
 /// DELETE /api/v1/agents/:name -- Soft delete (is_active=false).
@@ -293,45 +78,10 @@ async fn delete_agent(
     Path(name): Path<String>,
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:manage")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let row: Option<AgentResponse> = sqlx::query_as(
-        "UPDATE agents SET is_active = false, updated_at = now()
-         WHERE tenant_id = $1 AND name = $2 AND is_active = true
-         RETURNING id, tenant_id, name, display_name, description, model_deployment,
-                   prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by"
-    )
-    .bind(tenant_id.0)
-    .bind(&name)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
-    Ok(Json(r))
+    let agent = agent_service::delete(&state.db, tenant_id, &name).await?;
+    Ok(Json(agent))
 }
-
-// ── Export / Import types ─────────────────────────────────────────
-
-#[derive(Serialize, Deserialize)]
-pub struct AgentExport {
-    pub name: String,
-    pub display_name: String,
-    pub description: Option<String>,
-    pub model_deployment: String,
-    pub prompt_stack: serde_json::Value,
-    pub tools: serde_json::Value,
-    pub config: serde_json::Value,
-}
-
-// ── Export / Import handlers ─────────────────────────────────────
 
 /// GET /api/v1/agents/:name/export -- Export agent configuration as YAML.
 async fn export_agent(
@@ -340,40 +90,8 @@ async fn export_agent(
     Path(name): Path<String>,
 ) -> Result<axum::response::Response, CasperError> {
     guard.require("agents:manage")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let row: Option<AgentResponse> = sqlx::query_as(
-        "SELECT id, tenant_id, name, display_name, description, model_deployment,
-                prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by
-         FROM agents WHERE tenant_id = $1 AND name = $2",
-    )
-    .bind(tenant_id.0)
-    .bind(&name)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let agent = row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
-
-    let export = AgentExport {
-        name: agent.name,
-        display_name: agent.display_name,
-        description: agent.description,
-        model_deployment: agent.model_deployment,
-        prompt_stack: agent.prompt_stack,
-        tools: agent.tools,
-        config: agent.config,
-    };
-
-    let yaml = serde_yaml::to_string(&export)
-        .map_err(|e| CasperError::Internal(format!("YAML serialization error: {e}")))?;
+    let (yaml, agent_name) = agent_service::export_yaml(&state.db, tenant_id, &name).await?;
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -382,7 +100,7 @@ async fn export_agent(
     );
     headers.insert(
         header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{}.yaml\"", name)
+        format!("attachment; filename=\"{}.yaml\"", agent_name)
             .parse()
             .unwrap(),
     );
@@ -397,104 +115,12 @@ async fn import_agent(
     body: String,
 ) -> Result<Json<AgentResponse>, CasperError> {
     guard.require("agents:manage")?;
-
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let tdb = TenantDb::new(state.db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let export: AgentExport = serde_yaml::from_str(&body)
-        .map_err(|e| CasperError::BadRequest(format!("invalid YAML: {e}")))?;
-
-    // Validate model_deployment references an active deployment for this tenant
-    let deployment_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-            SELECT 1 FROM model_deployments
-            WHERE tenant_id = $1 AND slug = $2 AND is_active = true
-        )",
-    )
-    .bind(tenant_id.0)
-    .bind(&export.model_deployment)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    if !deployment_exists {
-        return Err(CasperError::BadRequest(format!(
-            "model deployment '{}' not found or inactive for this tenant",
-            export.model_deployment
-        )));
-    }
-
-    // Check if agent already exists — update if so, create if not
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM agents WHERE tenant_id = $1 AND name = $2",
-    )
-    .bind(tenant_id.0)
-    .bind(&export.name)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let row: AgentResponse = if let Some((existing_id,)) = existing {
-        // Update existing agent
-        sqlx::query_as(
-            "UPDATE agents SET
-                display_name     = $3,
-                description      = $4,
-                model_deployment = $5,
-                prompt_stack     = $6,
-                tools            = $7,
-                config           = $8,
-                version          = version + 1,
-                is_active        = true,
-                updated_at       = now()
-             WHERE id = $1 AND tenant_id = $2
-             RETURNING id, tenant_id, name, display_name, description, model_deployment,
-                       prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by",
-        )
-        .bind(existing_id)
-        .bind(tenant_id.0)
-        .bind(&export.display_name)
-        .bind(&export.description)
-        .bind(&export.model_deployment)
-        .bind(&export.prompt_stack)
-        .bind(&export.tools)
-        .bind(&export.config)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
-    } else {
-        // Create new agent
-        let id = Uuid::now_v7();
-        sqlx::query_as(
-            "INSERT INTO agents (id, tenant_id, name, display_name, description, model_deployment, prompt_stack, tools, config, created_by)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             RETURNING id, tenant_id, name, display_name, description, model_deployment,
-                       prompt_stack, tools, config, version, is_active, created_at, updated_at, created_by",
-        )
-        .bind(id)
-        .bind(tenant_id.0)
-        .bind(&export.name)
-        .bind(&export.display_name)
-        .bind(&export.description)
-        .bind(&export.model_deployment)
-        .bind(&export.prompt_stack)
-        .bind(&export.tools)
-        .bind(&export.config)
-        .bind(guard.0.actor())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
-    };
-
-    tx.commit().await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    Ok(Json(row))
+    let agent = agent_service::import_yaml(&state.db, tenant_id, &body, &guard.0.actor()).await?;
+    Ok(Json(agent))
 }
 
-// ── Router ────────────────────────────────────────────────────────
+// ── Router ───────────────────────────────────────────────────────
 
 pub fn agent_router() -> Router<AppState> {
     Router::new()
