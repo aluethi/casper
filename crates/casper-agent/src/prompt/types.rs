@@ -33,6 +33,8 @@ pub enum PromptBlock {
     },
     Delegates {
         label: String,
+        #[serde(default)]
+        agents: Vec<DelegateAgent>,
     },
     Datasource {
         label: String,
@@ -42,6 +44,16 @@ pub enum PromptBlock {
         #[serde(default = "default_on_missing")]
         on_missing: OnMissing,
     },
+}
+
+/// A delegate agent entry in the Delegates prompt block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateAgent {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub when: String,
 }
 
 fn default_budget() -> i32 { 500 }

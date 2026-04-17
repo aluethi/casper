@@ -1,3 +1,4 @@
+pub mod agent_backend_routes;
 pub mod agent_routes;
 pub mod apikey_routes;
 pub mod auth_routes;

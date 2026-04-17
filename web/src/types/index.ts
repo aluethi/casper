@@ -18,9 +18,13 @@ export interface Agent {
   display_name: string
   description: string | null
   model_deployment: string
+  prompt_stack: Record<string, unknown>[]
+  tools: { builtin?: { name: string; [key: string]: unknown }[]; mcp?: Record<string, unknown>[] }
+  config: Record<string, unknown>
   version: number
   tenant_id: string
   status: string
+  is_active: boolean
   created_at: string
   updated_at: string
 }

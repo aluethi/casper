@@ -570,13 +570,13 @@ GET    /ws/chat
 
 JWT-authenticated. Streams agent responses for portal chat UI. Not required for core flow — API + Slack notifications cover all use cases.
 
-### 9.2 Agent Backend (Self-Hosted GPU)
+### 9.2 Agent Backend (Ventoo Self-Hosted GPU)
 
 ```
 GET    /agent/connect
 ```
 
-Agent key (`csa-`) authenticated.
+Agent key (`csa-`) authenticated. Ventoo-operated GPU servers connect via WebSocket to serve inference requests. See `AGENT-BACKENDS-v1.md` for full specification. This is an enhancement — not part of V1 core.
 
 ---
 

@@ -21,3 +21,5 @@ dashmap = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 tokio-util = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = "0.10"

@@ -1,6 +1,6 @@
 use prometheus::{
-    Encoder, Histogram, IntCounter, IntCounterVec, Registry, TextEncoder,
-    histogram_opts, opts,
+    Encoder, Histogram, IntCounter, IntCounterVec, IntGaugeVec,
+    Registry, TextEncoder, histogram_opts, opts,
 };
 
 /// Prometheus runtime metrics.
@@ -14,6 +14,11 @@ pub struct RuntimeMetrics {
     pub actor_dehydrations: IntCounter,
     pub http_requests_total: IntCounterVec,
     pub http_request_duration: Histogram,
+    // Agent backend metrics (AB-6)
+    pub agent_backend_connections: IntGaugeVec,
+    pub agent_backend_active_requests: IntGaugeVec,
+    pub agent_backend_request_duration: Histogram,
+    pub agent_backend_errors: IntCounterVec,
 }
 
 impl RuntimeMetrics {
@@ -66,6 +71,42 @@ impl RuntimeMetrics {
         )
         .unwrap();
 
+        // Agent backend metrics
+        let agent_backend_connections = IntGaugeVec::new(
+            opts!(
+                "casper_agent_backend_connections",
+                "Number of connected agent backend sidecars"
+            ),
+            &["backend_id"],
+        )
+        .unwrap();
+
+        let agent_backend_active_requests = IntGaugeVec::new(
+            opts!(
+                "casper_agent_backend_active_requests",
+                "In-flight requests to agent backends"
+            ),
+            &["backend_id"],
+        )
+        .unwrap();
+
+        let agent_backend_request_duration = Histogram::with_opts(
+            histogram_opts!(
+                "casper_agent_backend_request_duration_seconds",
+                "Agent backend request duration in seconds"
+            ),
+        )
+        .unwrap();
+
+        let agent_backend_errors = IntCounterVec::new(
+            opts!(
+                "casper_agent_backend_errors_total",
+                "Agent backend errors by type"
+            ),
+            &["backend_id", "error_type"],
+        )
+        .unwrap();
+
         registry.register(Box::new(llm_calls_total.clone())).unwrap();
         registry.register(Box::new(llm_call_duration.clone())).unwrap();
         registry.register(Box::new(tool_calls_total.clone())).unwrap();
@@ -73,6 +114,10 @@ impl RuntimeMetrics {
         registry.register(Box::new(actor_dehydrations.clone())).unwrap();
         registry.register(Box::new(http_requests_total.clone())).unwrap();
         registry.register(Box::new(http_request_duration.clone())).unwrap();
+        registry.register(Box::new(agent_backend_connections.clone())).unwrap();
+        registry.register(Box::new(agent_backend_active_requests.clone())).unwrap();
+        registry.register(Box::new(agent_backend_request_duration.clone())).unwrap();
+        registry.register(Box::new(agent_backend_errors.clone())).unwrap();
 
         Self {
             registry,
@@ -83,6 +128,10 @@ impl RuntimeMetrics {
             actor_dehydrations,
             http_requests_total,
             http_request_duration,
+            agent_backend_connections,
+            agent_backend_active_requests,
+            agent_backend_request_duration,
+            agent_backend_errors,
         }
     }
 

@@ -1,9 +1,9 @@
 use axum::{Json, Router, extract::State, routing::{get, post}};
 use casper_base::{CasperError, Scope};
 use casper_base::scope::has_scope;
-use casper_catalog::{check_quota, merge_params, resolve_deployment};
+use casper_catalog::{check_quota, merge_params, resolve_deployment, ResolvedBackend, ResolvedDeployment};
 use casper_observe::UsageEvent;
-use casper_proxy::{LlmRequest, Message, dispatch_with_retry};
+use casper_proxy::{LlmRequest, LlmResponse, Message, dispatch_with_retry};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -152,10 +152,13 @@ async fn chat_completions(
         extra: merged_extra,
     };
 
-    // 5. Dispatch with retry/fallback
-    let http_client = &state.http_client;
-    let (llm_response, used_backend) =
-        dispatch_with_retry(http_client, &deployment, &llm_request).await?;
+    // 5. Dispatch with retry/fallback (supports agent + HTTP backends)
+    let (llm_response, used_backend) = dispatch_with_agent_support(
+        &state,
+        &deployment,
+        &llm_request,
+    )
+    .await?;
 
     // 6. Record usage event (fire-and-forget)
     let usage_event = UsageEvent {
@@ -264,6 +267,98 @@ async fn list_models(
     Ok(Json(ModelsListResponse {
         object: "list",
         data,
+    }))
+}
+
+// ── Agent-aware dispatch ──────────────────────────────────────────
+
+/// Dispatch with retry/fallback, supporting both HTTP and agent backends.
+async fn dispatch_with_agent_support<'a>(
+    state: &AppState,
+    deployment: &'a ResolvedDeployment,
+    request: &LlmRequest,
+) -> Result<(LlmResponse, &'a ResolvedBackend), CasperError> {
+    // Check if any backend is an agent backend
+    let has_agent = deployment
+        .backend_sequence
+        .iter()
+        .any(|b| b.provider == "agent");
+
+    if !has_agent {
+        // Pure HTTP — use the standard dispatch path
+        return dispatch_with_retry(&state.http_client, deployment, request).await;
+    }
+
+    // Mixed or pure agent — iterate manually with retry/fallback
+    let mut last_error: Option<CasperError> = None;
+    let timeout_ms = deployment.timeout_ms as u64;
+
+    for (idx, backend) in deployment.backend_sequence.iter().enumerate() {
+        tracing::debug!(
+            backend_name = %backend.name,
+            backend_provider = %backend.provider,
+            idx,
+            "attempting dispatch (agent-aware)"
+        );
+
+        for attempt in 0..=deployment.retry_attempts {
+            if attempt > 0 {
+                let delay_ms =
+                    deployment.retry_backoff_ms as u64 * (1u64 << (attempt as u64 - 1));
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+
+            let result = if backend.provider == "agent" {
+                if !state.agent_registry.is_available(&backend.id) {
+                    Err(CasperError::Unavailable(format!(
+                        "no agent backend connections for '{}'",
+                        backend.name
+                    )))
+                } else {
+                    state
+                        .agent_registry
+                        .dispatch(backend.id, request, timeout_ms)
+                        .await
+                }
+            } else {
+                casper_proxy::dispatch(&state.http_client, backend, request).await
+            };
+
+            match result {
+                Ok(response) => return Ok((response, backend)),
+                Err(e) => {
+                    tracing::warn!(
+                        backend_name = %backend.name,
+                        attempt,
+                        error = %e,
+                        "dispatch attempt failed"
+                    );
+                    if matches!(
+                        e,
+                        CasperError::BadRequest(_)
+                            | CasperError::Unauthorized
+                            | CasperError::Forbidden(_)
+                            | CasperError::NotFound(_)
+                    ) {
+                        return Err(e);
+                    }
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        if !deployment.fallback_enabled {
+            break;
+        }
+
+        tracing::info!(
+            backend_name = %backend.name,
+            "all retries exhausted, falling back to next backend"
+        );
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        CasperError::Unavailable("all backends exhausted".into())
     }))
 }
 
