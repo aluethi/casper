@@ -58,6 +58,24 @@ pub struct RunResponse {
     pub message: MessageResponse,
     pub usage: UsageResponse,
     pub correlation_id: Uuid,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<StepResponse>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct StepResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallStepResponse>>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ToolCallStepResponse {
+    pub name: String,
+    pub input: serde_json::Value,
+    pub result: String,
+    pub is_error: bool,
 }
 
 #[derive(Serialize)]
@@ -170,7 +188,7 @@ pub async fn execute_run(
 ) -> Result<RunResponse, CasperError> {
     let correlation_id = Uuid::now_v7();
 
-    let (assistant_text, usage) = {
+    let (assistant_text, usage, agent_steps) = {
         let engine = casper_agent::engine::AgentEngine::new(
             state.db_owner.clone(),
             state.http_client.clone(),
@@ -200,7 +218,20 @@ pub async fn execute_run(
                     tool_calls: resp.usage.tool_calls,
                     duration_ms: resp.usage.duration_ms,
                 };
-                (resp.message, usage)
+                let steps: Vec<StepResponse> = resp.steps.into_iter().map(|s| {
+                    StepResponse {
+                        thinking: s.thinking,
+                        tool_calls: s.tool_calls.map(|tcs| {
+                            tcs.into_iter().map(|tc| ToolCallStepResponse {
+                                name: tc.name,
+                                input: tc.input,
+                                result: tc.result,
+                                is_error: tc.is_error,
+                            }).collect()
+                        }),
+                    }
+                }).collect();
+                (resp.message, usage, steps)
             }
             Err(e) => {
                 tracing::warn!(
@@ -222,7 +253,7 @@ pub async fn execute_run(
                     tool_calls: 0,
                     duration_ms: 0,
                 };
-                (placeholder, usage)
+                (placeholder, usage, Vec::new())
             }
         }
     };
@@ -298,6 +329,7 @@ pub async fn execute_run(
         },
         usage,
         correlation_id,
+        steps: agent_steps,
     })
 }
 

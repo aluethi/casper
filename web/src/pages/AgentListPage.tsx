@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../lib/api'
-import type { Agent } from '../types'
+import type { Agent, Deployment, AvailableModel } from '../types'
 
 export default function AgentListPage() {
   const [agents, setAgents] = useState<Agent[]>([])
@@ -10,6 +10,8 @@ export default function AgentListPage() {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', display_name: '', description: '', model_deployment: '' })
   const [saving, setSaving] = useState(false)
+  const [deployments, setDeployments] = useState<Deployment[]>([])
+  const [models, setModels] = useState<AvailableModel[]>([])
 
   const load = () => {
     setLoading(true)
@@ -19,7 +21,16 @@ export default function AgentListPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  useEffect(() => {
+    load()
+    Promise.all([
+      api.get('/api/v1/deployments?per_page=100'),
+      api.get('/api/v1/deployments/available-models'),
+    ]).then(([depRes, modRes]) => {
+      setDeployments((depRes.data.data ?? depRes.data).filter((d: Deployment) => d.is_active))
+      setModels(modRes.data)
+    }).catch(() => {})
+  }, [])
 
   const create = async () => {
     setSaving(true)
@@ -60,9 +71,15 @@ export default function AgentListPage() {
           <textarea placeholder="Description" value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
             className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" rows={2} />
-          <input placeholder="Model Deployment" value={form.model_deployment}
+          <select value={form.model_deployment}
             onChange={(e) => setForm({ ...form, model_deployment: e.target.value })}
-            className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+            className="w-full rounded-lg ring-1 ring-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow">
+            <option value="">Select a deployment...</option>
+            {deployments.map(d => {
+              const m = models.find(x => x.id === d.model_id)
+              return <option key={d.slug} value={d.slug}>{d.name} ({d.slug}){m ? ` \u2014 ${m.display_name}` : ''}</option>
+            })}
+          </select>
           <button onClick={create} disabled={saving}
             className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors disabled:opacity-50">
             {saving ? 'Creating...' : 'Create'}

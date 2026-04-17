@@ -8,6 +8,7 @@ pub struct McpToolDef {
     /// Human-readable description of what the tool does.
     pub description: String,
     /// JSON Schema describing the tool's input parameters.
+    #[serde(alias = "inputSchema")]
     pub input_schema: serde_json::Value,
 }
 

@@ -1,7 +1,8 @@
 use casper_base::CasperError;
 use casper_catalog::{ResolvedBackend, ResolvedDeployment};
+use tokio::sync::mpsc;
 
-use crate::types::{LlmRequest, LlmResponse};
+use crate::types::{LlmRequest, LlmResponse, StreamEvent};
 
 /// Dispatch a single LLM request to a specific backend.
 /// Routes to the appropriate provider adapter based on `backend.provider`.
@@ -123,6 +124,89 @@ pub async fn dispatch_with_retry<'a>(
     Err(last_error.unwrap_or_else(|| {
         CasperError::Unavailable("all backends exhausted".into())
     }))
+}
+
+/// Streaming dispatch to a single backend.
+pub async fn dispatch_stream(
+    client: &reqwest::Client,
+    backend: &ResolvedBackend,
+    request: &LlmRequest,
+    tx: mpsc::Sender<StreamEvent>,
+) -> Result<LlmResponse, CasperError> {
+    let api_key = backend.api_key_enc.as_deref().unwrap_or("");
+    let base_url = backend.base_url.as_deref().ok_or_else(|| {
+        CasperError::Internal(format!("backend '{}' has no base_url configured", backend.name))
+    })?;
+
+    match backend.provider.as_str() {
+        "anthropic" => crate::anthropic::call_stream(client, base_url, api_key, request, tx).await,
+        "openai" | "azure_openai" | "openai_compatible" => {
+            crate::openai::call_stream(client, base_url, api_key, request, tx).await
+        }
+        "agent" => {
+            // Agent backends don't support streaming yet — fall back to non-streaming
+            let response = dispatch(client, backend, request).await?;
+            if !response.content.is_empty() {
+                let _ = tx.send(StreamEvent::ContentDelta { delta: response.content.clone() }).await;
+            }
+            Ok(response)
+        }
+        other => Err(CasperError::Internal(format!("unsupported provider: {other}"))),
+    }
+}
+
+/// Streaming dispatch with fallback.
+///
+/// Uses an inner channel per attempt: events are forwarded to the real `tx`
+/// only if the attempt succeeds. If the first backend fails before sending
+/// any events, we can safely try the next backend. If events were already
+/// forwarded (mid-stream failure), we propagate the error — you cannot
+/// un-send SSE events.
+pub async fn dispatch_stream_with_retry<'a>(
+    client: &reqwest::Client,
+    deployment: &'a ResolvedDeployment,
+    request: &LlmRequest,
+    tx: mpsc::Sender<StreamEvent>,
+) -> Result<(LlmResponse, &'a ResolvedBackend), CasperError> {
+    let mut last_error: Option<CasperError> = None;
+
+    for backend in &deployment.backend_sequence {
+        // Inner channel to detect whether events were emitted before failure
+        let (inner_tx, mut inner_rx) = mpsc::channel::<StreamEvent>(64);
+
+        // Spawn a forwarder: inner_rx → tx
+        let outer_tx = tx.clone();
+        let fwd_handle = tokio::spawn(async move {
+            let mut count = 0u64;
+            while let Some(event) = inner_rx.recv().await {
+                count += 1;
+                if outer_tx.send(event).await.is_err() { break; }
+            }
+            count
+        });
+
+        match dispatch_stream(client, backend, request, inner_tx).await {
+            Ok(response) => {
+                // Wait for forwarder to drain
+                let _ = fwd_handle.await;
+                return Ok((response, backend));
+            }
+            Err(e) => {
+                // Drop inner_tx (already moved into dispatch_stream), close forwarder
+                let events_sent = fwd_handle.await.unwrap_or(0);
+
+                if is_non_retryable(&e) || events_sent > 0 {
+                    // Can't retry — either client error or events already sent
+                    return Err(e);
+                }
+
+                last_error = Some(e);
+                if !deployment.fallback_enabled { break; }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| CasperError::Unavailable("all backends exhausted".into())))
 }
 
 /// Determine if an error should not be retried (4xx client errors).

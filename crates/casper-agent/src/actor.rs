@@ -70,6 +70,27 @@ pub struct AgentResponse {
     pub usage: AgentUsage,
     /// Correlation ID for tracing.
     pub correlation_id: Uuid,
+    /// Intermediate ReAct steps (thinking + tool calls per turn).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<AgentStep>,
+}
+
+/// A single ReAct loop iteration: optional thinking + optional tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStep {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallStep>>,
+}
+
+/// One tool call with its input and result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallStep {
+    pub name: String,
+    pub input: serde_json::Value,
+    pub result: String,
+    pub is_error: bool,
 }
 
 /// Token and call usage for a single agent invocation.

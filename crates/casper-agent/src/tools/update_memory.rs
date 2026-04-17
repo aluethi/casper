@@ -21,6 +21,14 @@ impl UpdateMemoryTool {
     pub fn new(max_document_tokens: i32) -> Self {
         Self { max_document_tokens }
     }
+
+    /// Construct from a tools-config JSON entry.
+    /// Expected key: `max_document_tokens` (int, default 4000).
+    pub fn from_config(config: &serde_json::Value) -> Self {
+        Self {
+            max_document_tokens: config.get("max_document_tokens").and_then(|v| v.as_i64()).unwrap_or(4000) as i32,
+        }
+    }
 }
 
 #[async_trait]

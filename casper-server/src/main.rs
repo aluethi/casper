@@ -79,6 +79,7 @@ async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>>
         ("0001_platform", include_str!("../../migrations/0001_platform.sql")),
         ("0002_tenant", include_str!("../../migrations/0002_tenant.sql")),
         ("0003_agent_backends", include_str!("../../migrations/0003_agent_backends.sql")),
+        ("0004_deployment_fallback", include_str!("../../migrations/0004_deployment_fallback.sql")),
     ];
 
     for (name, sql) in migration_files {

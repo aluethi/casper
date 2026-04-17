@@ -16,9 +16,10 @@ use std::time::Instant;
 
 use casper_base::CasperError;
 use casper_observe::{AuditWriter, UsageRecorder};
-use casper_proxy::{LlmRequest, Message, MessageRole};
+use casper_proxy::{LlmRequest, Message, MessageRole, StreamEvent};
 use serde_json::json;
 use sqlx::PgPool;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::actor::{AgentResponse, AgentUsage};
@@ -37,9 +38,12 @@ const DEFAULT_MAX_TURNS: usize = 25;
 #[derive(Debug)]
 struct AgentConfig {
     pub deployment_slug: String,
+    pub description: String,
     pub prompt_stack: serde_json::Value,
+    pub tools: serde_json::Value,
     pub config: serde_json::Value,
-    pub system_prompt: String, // assembled from prompt_stack
+    pub tenant_name: String,
+    pub system_prompt: String,
     pub max_turns: i32,
     pub max_tokens: i32,
     pub temperature: f64,
@@ -58,6 +62,8 @@ pub struct AgentEngine {
     pub llm_caller: Arc<dyn LlmCaller>,
     pub audit_writer: Option<AuditWriter>,
     pub usage_recorder: Option<UsageRecorder>,
+    /// Current delegation depth (0 = top-level call).
+    delegation_depth: u32,
 }
 
 impl AgentEngine {
@@ -80,6 +86,7 @@ impl AgentEngine {
             llm_caller,
             audit_writer,
             usage_recorder,
+            delegation_depth: 0,
         }
     }
 
@@ -97,6 +104,7 @@ impl AgentEngine {
             llm_caller,
             audit_writer: None,
             usage_recorder: None,
+            delegation_depth: 0,
         }
     }
 
@@ -122,13 +130,37 @@ impl AgentEngine {
             "starting ReAct loop"
         );
 
-        // 1. Load agent config
-        let config = self.load_agent_config(tenant_id, agent_name).await?;
+        // 1. Load agent config (without system prompt — needs MCP tool info first)
+        let mut config = self.load_agent_config(tenant_id, agent_name).await?;
         let max_turns = (config.max_turns as usize).min(DEFAULT_MAX_TURNS);
 
-        // 2. Build initial messages
+        // 2. Build tool dispatcher from agent's tools config (registers built-in + MCP tools)
+        let dynamic_dispatcher = crate::tools::build_dispatcher(
+            &config.tools,
+            &self.http_client,
+        ).await;
+        // Use the dynamically built dispatcher if it has tools, otherwise fall back
+        // to the pre-built one (allows callers to pre-register tools if needed).
+        let active_dispatcher = if !dynamic_dispatcher.is_empty() {
+            &dynamic_dispatcher
+        } else {
+            &self.tool_dispatcher
+        };
+
+        // 3. Assemble system prompt (after MCP discovery so tool docs include MCP tools)
+        let mcp_summaries = active_dispatcher.mcp_tool_summaries();
+        config.system_prompt = crate::prompt::assemble_system_prompt(
+            &config.prompt_stack,
+            &config.tools,
+            agent_name,
+            &config.description,
+            tenant_id,
+            &config.tenant_name,
+            &self.db,
+            &mcp_summaries,
+        ).await;
         let system_prompt = config.system_prompt.clone();
-        let tool_defs = self.tool_dispatcher.tool_definitions();
+        let tool_defs = active_dispatcher.tool_definitions();
 
         // Load conversation history
         let history = crate::prompt::load_conversation_history(
@@ -180,6 +212,7 @@ impl AgentEngine {
         };
 
         let mut usage = AgentUsage::default();
+        let mut steps: Vec<crate::actor::AgentStep> = Vec::new();
 
         for turn in 0..max_turns {
             tracing::debug!(
@@ -235,26 +268,25 @@ impl AgentEngine {
 
             if has_tools {
                 let tool_calls = response.tool_calls.as_ref().unwrap();
+                let step_thinking = response.thinking.clone();
 
-                // Build assistant message with tool_use blocks
-                let mut content_blocks: Vec<serde_json::Value> = Vec::new();
-                if !response.content.is_empty() {
-                    content_blocks.push(json!({
-                        "type": "text",
-                        "text": response.content,
-                    }));
-                }
-                for tc in tool_calls {
-                    content_blocks.push(tc.clone());
-                }
-
+                // Build assistant message in OpenAI format:
+                // { role: "assistant", content: text|null, tool_calls: [...] }
+                let assistant_content = if response.content.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    json!(response.content)
+                };
                 let assistant_msg = Message {
                     role: MessageRole::Assistant,
-                    content: json!(content_blocks),
+                    content: json!({
+                        "content": assistant_content,
+                        "tool_calls": tool_calls,
+                    }),
                 };
                 messages.push(assistant_msg.clone());
 
-                // Store assistant message with tool_use blocks
+                // Store assistant message
                 self.store_message(
                     tenant_id,
                     conversation_id,
@@ -264,9 +296,13 @@ impl AgentEngine {
                 )
                 .await?;
 
-                // Execute each tool call and collect results
+                // Execute each tool call (OpenAI format):
+                // { id: "call_123", type: "function", function: { name: "...", arguments: "..." } }
+                let mut step_tool_calls: Vec<crate::actor::ToolCallStep> = Vec::new();
+
                 for tc in tool_calls {
-                    let tool_name = tc
+                    let func = &tc["function"];
+                    let tool_name = func
                         .get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
@@ -274,9 +310,10 @@ impl AgentEngine {
                         .get("id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
-                    let tool_input = tc
-                        .get("input")
-                        .cloned()
+                    let tool_input: serde_json::Value = func
+                        .get("arguments")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| serde_json::from_str(s).ok())
                         .unwrap_or(json!({}));
 
                     tracing::debug!(
@@ -285,28 +322,50 @@ impl AgentEngine {
                         "executing tool"
                     );
 
-                    let tool_result = self
-                        .tool_dispatcher
-                        .dispatch(tool_name, tool_input, &tool_ctx)
+                    let mut tool_result = active_dispatcher
+                        .dispatch(tool_name, tool_input.clone(), &tool_ctx)
                         .await;
+
+                    // Intercept delegation sentinel — execute the child agent
+                    if let Ok(ref result) = tool_result {
+                        if result.content.get("__delegate__").and_then(|v| v.as_bool()) == Some(true) {
+                            let target = result.content["agent"].as_str().unwrap_or("");
+                            let child_msg = result.content["message"].as_str().unwrap_or("");
+
+                            // Read timeout/max_depth from delegate tool config
+                            let delegate_cfg = config.tools["builtin"]
+                                .as_array()
+                                .and_then(|arr| arr.iter().find(|e| e["name"] == "delegate"));
+                            let timeout_secs = delegate_cfg
+                                .and_then(|c| c["timeout_secs"].as_u64())
+                                .unwrap_or(300);
+                            let max_depth = delegate_cfg
+                                .and_then(|c| c["max_depth"].as_u64())
+                                .unwrap_or(3) as u32;
+
+                            tool_result = Ok(self.execute_delegation(
+                                target,
+                                child_msg,
+                                tenant_id,
+                                agent_name,
+                                correlation_id,
+                                timeout_secs,
+                                max_depth,
+                            ).await);
+                        }
+                    }
 
                     usage.tool_calls += 1;
 
-                    let result_content = match tool_result {
+                    // Build OpenAI tool result message:
+                    // { role: "tool", tool_call_id: "...", content: "..." }
+                    let (result_str, is_error) = match &tool_result {
                         Ok(result) => {
                             if result.is_error {
-                                json!({
-                                    "type": "tool_result",
-                                    "tool_use_id": tool_id,
-                                    "is_error": true,
-                                    "content": result.content,
-                                })
+                                (format!("Error: {}", result.content), true)
                             } else {
-                                json!({
-                                    "type": "tool_result",
-                                    "tool_use_id": tool_id,
-                                    "content": result.content,
-                                })
+                                (serde_json::to_string(&result.content)
+                                    .unwrap_or_else(|_| result.content.to_string()), false)
                             }
                         }
                         Err(e) => {
@@ -315,33 +374,27 @@ impl AgentEngine {
                                 error = %e,
                                 "tool execution failed"
                             );
-                            json!({
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "is_error": true,
-                                "content": format!("Tool error: {e}"),
-                            })
+                            (format!("Tool error: {e}"), true)
                         }
                     };
 
-                    // Check for sentinel results (delegate, ask_user)
-                    if let Some(content) = result_content.get("content") {
-                        if content.get("__delegate__").is_some()
-                            || content.get("__ask_user__").is_some()
-                        {
-                            // For now, just include the result — actual handling
-                            // will be added when wiring to the actor system.
-                            tracing::info!(
-                                tool = %tool_name,
-                                "sentinel tool result detected"
-                            );
-                        }
-                    }
+                    // Capture for steps
+                    step_tool_calls.push(crate::actor::ToolCallStep {
+                        name: tool_name.to_string(),
+                        input: tool_input,
+                        result: result_str.clone(),
+                        is_error,
+                    });
+
+                    let tool_msg_content = json!({
+                        "tool_call_id": tool_id,
+                        "content": result_str,
+                    });
 
                     // Add tool result as a message
                     let tool_msg = Message {
                         role: MessageRole::Tool,
-                        content: result_content.clone(),
+                        content: tool_msg_content.clone(),
                     };
                     messages.push(tool_msg);
 
@@ -350,11 +403,16 @@ impl AgentEngine {
                         tenant_id,
                         conversation_id,
                         "tool",
-                        &result_content,
+                        &tool_msg_content,
                         agent_name,
                     )
                     .await?;
                 }
+
+                steps.push(crate::actor::AgentStep {
+                    thinking: step_thinking,
+                    tool_calls: Some(step_tool_calls),
+                });
 
                 // Continue the loop — next iteration will send results to LLM
                 continue;
@@ -362,6 +420,14 @@ impl AgentEngine {
 
             // No tool calls — this is the final response
             let final_message = response.content.clone();
+
+            // Capture final thinking (if any)
+            if response.thinking.is_some() {
+                steps.push(crate::actor::AgentStep {
+                    thinking: response.thinking.clone(),
+                    tool_calls: None,
+                });
+            }
 
             // Store assistant response
             self.store_message(
@@ -399,11 +465,250 @@ impl AgentEngine {
                 conversation_id,
                 usage,
                 correlation_id,
+                steps,
             });
         }
 
         // Max turns exceeded
         let _duration_ms = start.elapsed().as_millis() as u64;
+        Err(CasperError::Internal(format!(
+            "Agent '{agent_name}' exceeded maximum turns ({max_turns})"
+        )))
+    }
+
+    /// Streaming variant of `run`. Sends `StreamEvent`s through `tx` as the
+    /// ReAct loop progresses: thinking, content deltas, tool calls, tool results.
+    /// Returns the same `AgentResponse` as `run()` for DB persistence.
+    pub async fn run_stream(
+        &self,
+        tenant_id: Uuid,
+        agent_name: &str,
+        conversation_id: Uuid,
+        user_message: &str,
+        author: &str,
+        _metadata: &serde_json::Value,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Result<AgentResponse, CasperError> {
+        let correlation_id = Uuid::now_v7();
+        let start = Instant::now();
+
+        // 1. Load config + build dispatcher (same as run)
+        let mut config = self.load_agent_config(tenant_id, agent_name).await?;
+        let max_turns = (config.max_turns as usize).min(DEFAULT_MAX_TURNS);
+
+        let dynamic_dispatcher = crate::tools::build_dispatcher(
+            &config.tools,
+            &self.http_client,
+        ).await;
+        let active_dispatcher = if !dynamic_dispatcher.is_empty() {
+            &dynamic_dispatcher
+        } else {
+            &self.tool_dispatcher
+        };
+
+        let mcp_summaries = active_dispatcher.mcp_tool_summaries();
+        config.system_prompt = crate::prompt::assemble_system_prompt(
+            &config.prompt_stack,
+            &config.tools,
+            agent_name,
+            &config.description,
+            tenant_id,
+            &config.tenant_name,
+            &self.db,
+            &mcp_summaries,
+        ).await;
+        let system_prompt = config.system_prompt.clone();
+        let tool_defs = active_dispatcher.tool_definitions();
+
+        // Load history + append user message
+        let history = crate::prompt::load_conversation_history(
+            &self.db, tenant_id, conversation_id, 8000,
+        ).await.map_err(|e| CasperError::Internal(format!("Failed to load history: {e}")))?;
+
+        let mut messages: Vec<Message> = history
+            .into_iter()
+            .filter_map(|h| {
+                let role: MessageRole = serde_json::from_value(
+                    serde_json::Value::String(h.role.clone()),
+                ).ok()?;
+                Some(Message { role, content: h.content })
+            })
+            .collect();
+
+        messages.push(Message {
+            role: MessageRole::User,
+            content: serde_json::Value::String(user_message.to_string()),
+        });
+
+        self.store_message(tenant_id, conversation_id, "user",
+            &serde_json::Value::String(user_message.to_string()), author).await?;
+
+        let tool_ctx = ToolContext {
+            tenant_id, agent_name: agent_name.to_string(),
+            conversation_id, correlation_id, db: self.db.clone(),
+        };
+
+        let mut usage = AgentUsage::default();
+        let mut steps: Vec<crate::actor::AgentStep> = Vec::new();
+
+        // 2. ReAct loop with streaming
+        for turn in 0..max_turns {
+            // Abort early if the client disconnected (receiver dropped)
+            if tx.is_closed() {
+                tracing::info!(agent = %agent_name, turn, "SSE client disconnected, aborting");
+                return Err(CasperError::Internal("client disconnected".into()));
+            }
+
+            let request = LlmRequest {
+                messages: messages.clone(),
+                model: config.deployment_slug.clone(),
+                max_tokens: Some(config.max_tokens),
+                temperature: Some(config.temperature),
+                stream: true,
+                tools: if tool_defs.is_empty() { None } else { Some(tool_defs.clone()) },
+                extra: json!({ "system": system_prompt }),
+            };
+
+            // Stream LLM call — thinking and content deltas flow through tx
+            let (response, backend_id) = self.llm_caller.call_stream(tenant_id, &request, tx.clone()).await?;
+
+            usage.input_tokens += response.input_tokens;
+            usage.output_tokens += response.output_tokens;
+            usage.cache_read_tokens += response.cache_read_tokens.unwrap_or(0);
+            usage.cache_write_tokens += response.cache_write_tokens.unwrap_or(0);
+            usage.llm_calls += 1;
+
+            self.record_usage(tenant_id, agent_name, &config.deployment_slug,
+                &response, backend_id, correlation_id).await;
+
+            let has_tools = response.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
+
+            if has_tools {
+                let tool_calls = response.tool_calls.as_ref().unwrap();
+                let step_thinking = response.thinking.clone();
+
+                let assistant_content = if response.content.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    json!(response.content)
+                };
+                let assistant_msg = Message {
+                    role: MessageRole::Assistant,
+                    content: json!({ "content": assistant_content, "tool_calls": tool_calls }),
+                };
+                messages.push(assistant_msg.clone());
+                self.store_message(tenant_id, conversation_id, "assistant",
+                    &assistant_msg.content, agent_name).await?;
+
+                let mut step_tool_calls: Vec<crate::actor::ToolCallStep> = Vec::new();
+
+                for tc in tool_calls {
+                    let func = &tc["function"];
+                    let tool_name = func.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let tool_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let tool_input: serde_json::Value = func
+                        .get("arguments")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or(json!({}));
+
+                    let mut tool_result = active_dispatcher
+                        .dispatch(tool_name, tool_input.clone(), &tool_ctx).await;
+
+                    // Handle delegation
+                    if let Ok(ref result) = tool_result {
+                        if result.content.get("__delegate__").and_then(|v| v.as_bool()) == Some(true) {
+                            let target = result.content["agent"].as_str().unwrap_or("");
+                            let child_msg = result.content["message"].as_str().unwrap_or("");
+                            let delegate_cfg = config.tools["builtin"].as_array()
+                                .and_then(|arr| arr.iter().find(|e| e["name"] == "delegate"));
+                            let timeout_secs = delegate_cfg.and_then(|c| c["timeout_secs"].as_u64()).unwrap_or(300);
+                            let max_depth = delegate_cfg.and_then(|c| c["max_depth"].as_u64()).unwrap_or(3) as u32;
+                            tool_result = Ok(self.execute_delegation(
+                                target, child_msg, tenant_id, agent_name,
+                                correlation_id, timeout_secs, max_depth,
+                            ).await);
+                        }
+                    }
+
+                    usage.tool_calls += 1;
+
+                    let (result_str, is_error) = match &tool_result {
+                        Ok(result) => {
+                            if result.is_error {
+                                (format!("Error: {}", result.content), true)
+                            } else {
+                                (serde_json::to_string(&result.content)
+                                    .unwrap_or_else(|_| result.content.to_string()), false)
+                            }
+                        }
+                        Err(e) => (format!("Tool error: {e}"), true),
+                    };
+
+                    // Stream tool result event
+                    let _ = tx.send(StreamEvent::ToolResult {
+                        id: tool_id.to_string(),
+                        name: tool_name.to_string(),
+                        content: result_str.clone(),
+                        is_error,
+                    }).await;
+
+                    step_tool_calls.push(crate::actor::ToolCallStep {
+                        name: tool_name.to_string(),
+                        input: tool_input,
+                        result: result_str.clone(),
+                        is_error,
+                    });
+
+                    let tool_msg = Message {
+                        role: MessageRole::Tool,
+                        content: json!({ "tool_call_id": tool_id, "content": result_str }),
+                    };
+                    messages.push(tool_msg.clone());
+                    self.store_message(tenant_id, conversation_id, "tool",
+                        &tool_msg.content, agent_name).await?;
+                }
+
+                steps.push(crate::actor::AgentStep {
+                    thinking: step_thinking, tool_calls: Some(step_tool_calls),
+                });
+                continue;
+            }
+
+            // Final response — content was already streamed via tx
+            let final_message = response.content.clone();
+
+            if response.thinking.is_some() {
+                steps.push(crate::actor::AgentStep {
+                    thinking: response.thinking.clone(), tool_calls: None,
+                });
+            }
+
+            self.store_message(tenant_id, conversation_id, "assistant",
+                &serde_json::Value::String(final_message.clone()), agent_name).await?;
+
+            self.record_audit(tenant_id, author, agent_name, conversation_id,
+                correlation_id, &usage);
+
+            usage.duration_ms = start.elapsed().as_millis() as u64;
+
+            // Send done event
+            let _ = tx.send(StreamEvent::Done {
+                conversation_id: conversation_id.to_string(),
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: Some(usage.cache_read_tokens),
+                cache_write_tokens: Some(usage.cache_write_tokens),
+            }).await;
+
+            return Ok(AgentResponse {
+                message: final_message, conversation_id, usage, correlation_id, steps,
+            });
+        }
+
+        let _ = tx.send(StreamEvent::Error {
+            message: format!("Agent '{agent_name}' exceeded maximum turns ({max_turns})"),
+        }).await;
         Err(CasperError::Internal(format!(
             "Agent '{agent_name}' exceeded maximum turns ({max_turns})"
         )))

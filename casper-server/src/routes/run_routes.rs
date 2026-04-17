@@ -1,11 +1,15 @@
+use std::convert::Infallible;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, sse::{Event, KeepAlive, Sse}},
     routing::{get, post},
 };
 use casper_base::CasperError;
+use casper_proxy::StreamEvent;
+use futures::{stream::Stream, StreamExt};
 use uuid::Uuid;
 
 use crate::AppState;
@@ -99,6 +103,71 @@ async fn run_agent(
     }
 }
 
+/// POST /api/v1/agents/:name/run/stream -- Streaming agent run via SSE.
+async fn run_agent_stream(
+    State(state): State<AppState>,
+    guard: ScopeGuard,
+    Path(name): Path<String>,
+    Json(body): Json<RunRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, CasperError> {
+    guard.require(&format!("agents:{name}:run"))?;
+
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let actor = guard.0.actor();
+
+    let conversation_id = run_service::prepare_conversation(
+        &state.db, tenant_id, &name, body.conversation_id, &body.message,
+    ).await?;
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
+
+    // Spawn the agent engine in the background
+    let state_clone = state.clone();
+    let name_clone = name.clone();
+    let message = body.message.clone();
+    let metadata = body.metadata.clone();
+    let actor_clone = actor.clone();
+
+    tokio::spawn(async move {
+        let engine = casper_agent::engine::AgentEngine::new(
+            state_clone.db_owner.clone(),
+            state_clone.http_client.clone(),
+            casper_agent::tools::ToolDispatcher::new(),
+            Some(state_clone.audit.clone()),
+            Some(state_clone.usage.clone()),
+        );
+
+        if let Err(e) = engine.run_stream(
+            tenant_id.0,
+            &name_clone,
+            conversation_id,
+            &message,
+            &actor_clone,
+            &metadata,
+            tx.clone(),
+        ).await {
+            let _ = tx.send(StreamEvent::Error { message: e.to_string() }).await;
+        }
+        // tx is dropped here, closing the stream
+    });
+
+    // Convert the mpsc receiver to an SSE stream
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|event| {
+        let event_name = match &event {
+            StreamEvent::Thinking { .. } => "thinking",
+            StreamEvent::ContentDelta { .. } => "content_delta",
+            StreamEvent::ToolCallStart { .. } => "tool_call_start",
+            StreamEvent::ToolResult { .. } => "tool_result",
+            StreamEvent::Done { .. } => "done",
+            StreamEvent::Error { .. } => "error",
+        };
+        let data = serde_json::to_string(&event).unwrap_or_default();
+        Ok(Event::default().event(event_name).data(data))
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
 /// GET /api/v1/agents/:name/tasks/:task_id -- Poll async task result.
 async fn get_task_status(
     State(state): State<AppState>,
@@ -115,6 +184,7 @@ async fn get_task_status(
 pub fn run_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/agents/{name}/run", post(run_agent))
+        .route("/api/v1/agents/{name}/run/stream", post(run_agent_stream))
         .route(
             "/api/v1/agents/{name}/tasks/{task_id}",
             get(get_task_status),

@@ -18,6 +18,7 @@ pub struct ResolvedDeployment {
     pub fallback_enabled: bool,
     pub timeout_ms: i32,
     pub default_params: serde_json::Value,
+    pub fallback_deployment_id: Option<Uuid>,
 }
 
 /// A resolved backend with connection info.
@@ -43,6 +44,7 @@ type DeploymentRow = (
     bool,               // fallback_enabled
     i32,                // timeout_ms
     serde_json::Value,  // default_params
+    Option<Uuid>,       // fallback_deployment_id
 );
 
 type BackendRow = (Uuid, String, String, Option<String>, Option<String>);
@@ -60,7 +62,8 @@ pub async fn resolve_deployment(
     let row: Option<DeploymentRow> = sqlx::query_as(
         "SELECT d.id, d.model_id, m.name, d.slug,
                 d.backend_sequence, d.retry_attempts, d.retry_backoff_ms,
-                d.fallback_enabled, d.timeout_ms, d.default_params
+                d.fallback_enabled, d.timeout_ms, d.default_params,
+                d.fallback_deployment_id
          FROM model_deployments d
          JOIN models m ON m.id = d.model_id
          WHERE d.tenant_id = $1 AND d.slug = $2 AND d.is_active = true AND m.is_active = true",
@@ -82,6 +85,7 @@ pub async fn resolve_deployment(
         fallback_enabled,
         timeout_ms,
         default_params,
+        fallback_deployment_id,
     ) = row.ok_or_else(|| {
         CasperError::NotFound(format!("deployment '{slug}' not found or inactive"))
     })?;
@@ -143,6 +147,90 @@ pub async fn resolve_deployment(
         fallback_enabled,
         timeout_ms,
         default_params,
+        fallback_deployment_id,
+    })
+}
+
+/// Resolve a deployment by ID (used for fallback chain).
+pub async fn resolve_deployment_by_id(
+    pool: &PgPool,
+    deployment_id: Uuid,
+) -> Result<ResolvedDeployment, CasperError> {
+    let row: Option<DeploymentRow> = sqlx::query_as(
+        "SELECT d.id, d.model_id, m.name, d.slug,
+                d.backend_sequence, d.retry_attempts, d.retry_backoff_ms,
+                d.fallback_enabled, d.timeout_ms, d.default_params,
+                d.fallback_deployment_id
+         FROM model_deployments d
+         JOIN models m ON m.id = d.model_id
+         WHERE d.id = $1 AND d.is_active = true AND m.is_active = true",
+    )
+    .bind(deployment_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| CasperError::Internal(format!("DB error resolving deployment: {e}")))?;
+
+    let (
+        dep_id,
+        model_id,
+        model_name,
+        slug,
+        backend_sequence_ids,
+        retry_attempts,
+        retry_backoff_ms,
+        fallback_enabled,
+        timeout_ms,
+        default_params,
+        fallback_dep_id,
+    ) = row.ok_or_else(|| {
+        CasperError::NotFound(format!("fallback deployment '{deployment_id}' not found or inactive"))
+    })?;
+
+    let backends: Vec<BackendRow> = if backend_sequence_ids.is_empty() {
+        sqlx::query_as(
+            "SELECT pb.id, pb.name, pb.provider, pb.base_url, pb.api_key_enc
+             FROM platform_backend_models pbm
+             JOIN platform_backends pb ON pb.id = pbm.backend_id
+             WHERE pbm.model_id = $1 AND pb.is_active = true
+             ORDER BY pbm.priority",
+        )
+        .bind(model_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error resolving backends: {e}")))?
+    } else {
+        sqlx::query_as(
+            "SELECT pb.id, pb.name, pb.provider, pb.base_url, pb.api_key_enc
+             FROM unnest($1::UUID[]) WITH ORDINALITY AS s(backend_id, ord)
+             JOIN platform_backends pb ON pb.id = s.backend_id
+             WHERE pb.is_active = true
+             ORDER BY s.ord",
+        )
+        .bind(&backend_sequence_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error resolving backends: {e}")))?
+    };
+
+    let resolved_backends = backends
+        .into_iter()
+        .map(|(id, name, provider, base_url, api_key_enc)| ResolvedBackend {
+            id, name, provider, base_url, api_key_enc,
+        })
+        .collect();
+
+    Ok(ResolvedDeployment {
+        deployment_id: dep_id,
+        model_id,
+        model_name,
+        slug,
+        backend_sequence: resolved_backends,
+        retry_attempts,
+        retry_backoff_ms,
+        fallback_enabled,
+        timeout_ms,
+        default_params,
+        fallback_deployment_id: fallback_dep_id,
     })
 }
 

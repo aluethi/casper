@@ -1,6 +1,9 @@
 use casper_base::{CasperError, Scope};
 use casper_base::scope::has_scope;
-use casper_catalog::{check_quota, merge_params, resolve_deployment, ResolvedBackend, ResolvedDeployment};
+use casper_catalog::{
+    check_quota, merge_params, resolve_deployment, resolve_deployment_by_id,
+    ResolvedBackend, ResolvedDeployment,
+};
 use casper_observe::UsageEvent;
 use casper_proxy::{LlmRequest, LlmResponse, Message, dispatch_with_retry};
 use serde::{Deserialize, Serialize};
@@ -8,6 +11,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::AppState;
+
+/// Maximum deployment fallback chain depth to prevent cycles.
+const MAX_FALLBACK_DEPTH: usize = 3;
 
 // ── Request types ─────────────────────────────────────────────────
 
@@ -58,6 +64,8 @@ pub struct ChoiceMessage {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -99,15 +107,7 @@ pub async fn chat_completions(
         ));
     }
 
-    // Resolve deployment
-    let deployment = resolve_deployment(&state.db_owner, tenant_id, slug).await?;
-
-    // Check quota
-    check_quota(&state.db_owner, tenant_id, deployment.model_id).await?;
-
-    // Build LlmRequest from ChatCompletionRequest + deployment.default_params
-    let merged_extra = merge_params(&deployment.default_params, &req.extra);
-
+    // Parse messages once (shared across fallback chain)
     let messages: Vec<Message> = req
         .messages
         .iter()
@@ -115,92 +115,135 @@ pub async fn chat_completions(
             let role_str = m["role"].as_str().unwrap_or("user");
             let role: casper_proxy::MessageRole = serde_json::from_value(
                 serde_json::Value::String(role_str.to_string()),
-            ).unwrap_or(casper_proxy::MessageRole::User);
+            )
+            .unwrap_or(casper_proxy::MessageRole::User);
             let content = m.get("content").cloned().unwrap_or(serde_json::Value::Null);
             Message { role, content }
         })
         .collect();
 
-    let max_tokens = req
-        .max_tokens
-        .or_else(|| {
+    // Resolve primary deployment
+    let mut deployment = resolve_deployment(&state.db_owner, tenant_id, slug).await?;
+    let mut last_error: Option<CasperError> = None;
+
+    // Walk the deployment fallback chain
+    for depth in 0..=MAX_FALLBACK_DEPTH {
+        // Check quota for this deployment's model
+        check_quota(&state.db_owner, tenant_id, deployment.model_id).await?;
+
+        // Build LlmRequest for this deployment
+        let merged_extra = merge_params(&deployment.default_params, &req.extra);
+        let max_tokens = req.max_tokens.or_else(|| {
             deployment.default_params["max_tokens"]
                 .as_i64()
                 .map(|v| v as i32)
         });
+        let temperature = req
+            .temperature
+            .or_else(|| deployment.default_params["temperature"].as_f64());
 
-    let temperature = req
-        .temperature
-        .or_else(|| deployment.default_params["temperature"].as_f64());
+        let llm_request = LlmRequest {
+            messages: messages.clone(),
+            model: deployment.model_name.clone(),
+            max_tokens,
+            temperature,
+            stream: false,
+            tools: req.tools.clone(),
+            extra: merged_extra,
+        };
 
-    let llm_request = LlmRequest {
-        messages,
-        model: deployment.model_name.clone(),
-        max_tokens,
-        temperature,
-        stream: false,
-        tools: req.tools.clone(),
-        extra: merged_extra,
-    };
+        // Try dispatching through this deployment's backends
+        match dispatch_with_agent_support(state, &deployment, &llm_request).await {
+            Ok((llm_response, used_backend)) => {
+                // Record usage
+                let usage_event = UsageEvent {
+                    tenant_id,
+                    source: "inference".to_string(),
+                    model: deployment.model_name.clone(),
+                    deployment_slug: Some(deployment.slug.clone()),
+                    agent_name: None,
+                    input_tokens: llm_response.input_tokens,
+                    output_tokens: llm_response.output_tokens,
+                    cache_read_tokens: llm_response.cache_read_tokens,
+                    cache_write_tokens: llm_response.cache_write_tokens,
+                    backend_id: Some(used_backend.id),
+                    correlation_id,
+                };
+                let usage_recorder = state.usage.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = usage_recorder.record(usage_event).await {
+                        tracing::warn!(error = %e, "failed to record usage event");
+                    }
+                });
 
-    // Dispatch with retry/fallback (supports agent + HTTP backends)
-    let (llm_response, used_backend) = dispatch_with_agent_support(
-        state,
-        &deployment,
-        &llm_request,
-    )
-    .await?;
+                // Build response
+                let response_id = format!("chatcmpl-{}", Uuid::now_v7().simple());
+                let choice_message = ChoiceMessage {
+                    role: llm_response.role.to_string(),
+                    content: if llm_response.content.is_empty() {
+                        None
+                    } else {
+                        Some(llm_response.content.clone())
+                    },
+                    tool_calls: llm_response.tool_calls.clone(),
+                    thinking: llm_response.thinking.clone(),
+                };
 
-    // Record usage event (fire-and-forget)
-    let usage_event = UsageEvent {
-        tenant_id,
-        source: "inference".to_string(),
-        model: deployment.model_name.clone(),
-        deployment_slug: Some(deployment.slug.clone()),
-        agent_name: None,
-        input_tokens: llm_response.input_tokens,
-        output_tokens: llm_response.output_tokens,
-        cache_read_tokens: llm_response.cache_read_tokens,
-        cache_write_tokens: llm_response.cache_write_tokens,
-        backend_id: Some(used_backend.id),
-        correlation_id,
-    };
+                return Ok(ChatCompletionResponse {
+                    id: response_id,
+                    object: "chat.completion",
+                    model: slug.clone(),
+                    choices: vec![Choice {
+                        index: 0,
+                        message: choice_message,
+                        finish_reason: llm_response.finish_reason.clone(),
+                    }],
+                    usage: Usage {
+                        prompt_tokens: llm_response.input_tokens,
+                        completion_tokens: llm_response.output_tokens,
+                        total_tokens: llm_response.input_tokens + llm_response.output_tokens,
+                    },
+                });
+            }
+            Err(e) => {
+                // Client errors are not retryable across deployments
+                if matches!(
+                    e,
+                    CasperError::BadRequest(_)
+                        | CasperError::Unauthorized
+                        | CasperError::Forbidden(_)
+                        | CasperError::NotFound(_)
+                ) {
+                    return Err(e);
+                }
 
-    let usage_recorder = state.usage.clone();
-    tokio::spawn(async move {
-        if let Err(e) = usage_recorder.record(usage_event).await {
-            tracing::warn!(error = %e, "failed to record usage event");
+                tracing::warn!(
+                    deployment_slug = %deployment.slug,
+                    depth,
+                    error = %e,
+                    "deployment backends exhausted"
+                );
+                last_error = Some(e);
+
+                // Try fallback deployment if configured
+                if let Some(fallback_id) = deployment.fallback_deployment_id {
+                    tracing::info!(
+                        from = %deployment.slug,
+                        fallback_id = %fallback_id,
+                        "falling back to next deployment"
+                    );
+                    deployment =
+                        resolve_deployment_by_id(&state.db_owner, fallback_id).await?;
+                } else {
+                    break;
+                }
+            }
         }
-    });
+    }
 
-    // Build OpenAI-compatible response
-    let response_id = format!("chatcmpl-{}", Uuid::now_v7().simple());
-
-    let choice_message = ChoiceMessage {
-        role: llm_response.role.to_string(),
-        content: if llm_response.content.is_empty() {
-            None
-        } else {
-            Some(llm_response.content.clone())
-        },
-        tool_calls: llm_response.tool_calls.clone(),
-    };
-
-    Ok(ChatCompletionResponse {
-        id: response_id,
-        object: "chat.completion",
-        model: slug.clone(),
-        choices: vec![Choice {
-            index: 0,
-            message: choice_message,
-            finish_reason: llm_response.finish_reason.clone(),
-        }],
-        usage: Usage {
-            prompt_tokens: llm_response.input_tokens,
-            completion_tokens: llm_response.output_tokens,
-            total_tokens: llm_response.input_tokens + llm_response.output_tokens,
-        },
-    })
+    Err(last_error.unwrap_or_else(|| {
+        CasperError::Unavailable("all deployments exhausted".into())
+    }))
 }
 
 pub async fn list_models(

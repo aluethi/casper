@@ -19,6 +19,7 @@ import ModelsPage from './pages/admin/ModelsPage'
 import BackendsPage from './pages/admin/BackendsPage'
 import QuotasPage from './pages/admin/QuotasPage'
 import TenantsPage from './pages/admin/TenantsPage'
+import PlaygroundPage from './pages/PlaygroundPage'
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="/agents/:name" element={<AgentBuilderPage />} />
         <Route path="/catalog" element={<CatalogPage />} />
         <Route path="/deployments" element={<DeploymentListPage />} />
+        <Route path="/playground" element={<PlaygroundPage />} />
         <Route path="/keys" element={<ApiKeyListPage />} />
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/memory" element={<MemoryPage />} />

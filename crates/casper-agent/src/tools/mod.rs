@@ -7,6 +7,7 @@
 pub mod ask_user;
 pub mod delegate;
 pub mod knowledge_search;
+pub mod mcp;
 pub mod update_memory;
 pub mod web_fetch;
 pub mod web_search;
@@ -118,15 +119,18 @@ impl ToolDispatcher {
         tool.execute(input, ctx).await
     }
 
-    /// Return tool definitions formatted for the LLM API (Anthropic format).
+    /// Return tool definitions in OpenAI function-calling format.
     pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
         self.tools
             .values()
             .map(|tool| {
                 serde_json::json!({
-                    "name": tool.name(),
-                    "description": tool.description(),
-                    "input_schema": tool.parameters_schema(),
+                    "type": "function",
+                    "function": {
+                        "name": tool.name(),
+                        "description": tool.description(),
+                        "parameters": tool.parameters_schema(),
+                    }
                 })
             })
             .collect()
@@ -141,12 +145,128 @@ impl ToolDispatcher {
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
+
+    /// Return MCP tool summaries grouped by server name.
+    ///
+    /// Parses the `mcp__{server}__{tool}` prefix to group tools.
+    /// Each entry is `(qualified_name, description)`.
+    pub fn mcp_tool_summaries(&self) -> HashMap<String, Vec<(String, String)>> {
+        let mut groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for tool in self.tools.values() {
+            let name = tool.name();
+            if let Some(rest) = name.strip_prefix("mcp__") {
+                if let Some((server, _tool)) = rest.split_once("__") {
+                    groups
+                        .entry(server.to_string())
+                        .or_default()
+                        .push((name.to_string(), tool.description().to_string()));
+                }
+            }
+        }
+        // Sort tools within each server for deterministic output
+        for tools in groups.values_mut() {
+            tools.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+        groups
+    }
 }
 
 impl Default for ToolDispatcher {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ── Dispatcher builder ──────────────────────────────────────────
+
+/// Build a [`ToolDispatcher`] from an agent's `tools` JSON config.
+///
+/// The config shape is:
+/// ```json
+/// {
+///   "builtin": [{ "name": "delegate", ... }, { "name": "web_search", ... }],
+///   "mcp": [{ "name": "jira", "url": "https://...", "api_key": "..." }]
+/// }
+/// ```
+///
+/// Built-in tools are registered by name. MCP tools are discovered from each
+/// configured server and registered with a `mcp__{server}__{tool}` prefix.
+/// If an MCP server is unreachable, its tools are silently skipped so the
+/// agent can still start.
+pub async fn build_dispatcher(
+    tools_config: &serde_json::Value,
+    http_client: &reqwest::Client,
+) -> ToolDispatcher {
+    let mut dispatcher = ToolDispatcher::new();
+
+    // ── Built-in tools ──
+    if let Some(builtin) = tools_config.get("builtin").and_then(|v| v.as_array()) {
+        for entry in builtin {
+            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            match name {
+                "delegate" => dispatcher.register(Arc::new(delegate::DelegateTool)),
+                "ask_user" => dispatcher.register(Arc::new(ask_user::AskUserTool)),
+                "knowledge_search" => dispatcher.register(Arc::new(
+                    knowledge_search::KnowledgeSearchTool::from_config(entry),
+                )),
+                "update_memory" => dispatcher.register(Arc::new(
+                    update_memory::UpdateMemoryTool::from_config(entry),
+                )),
+                "web_search" => dispatcher.register(Arc::new(
+                    web_search::WebSearchTool::from_config(entry, http_client.clone()),
+                )),
+                "web_fetch" => dispatcher.register(Arc::new(
+                    web_fetch::WebFetchTool::from_config_with_client(entry, http_client.clone()),
+                )),
+                other => {
+                    tracing::warn!(tool = other, "unknown built-in tool in config — skipping");
+                }
+            }
+        }
+    }
+
+    // ── MCP tools ──
+    if let Some(servers) = tools_config.get("mcp").and_then(|v| v.as_array()) {
+        for server_cfg in servers {
+            let server_name = server_cfg
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let url = match server_cfg.get("url").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => {
+                    tracing::warn!(server = server_name, "MCP server config missing 'url' — skipping");
+                    continue;
+                }
+            };
+            let api_key = server_cfg
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let client = Arc::new(casper_mcp::McpClient::new(
+                url,
+                api_key,
+                http_client.clone(),
+            ));
+
+            let tools = mcp::discover_and_wrap(server_name, client).await;
+            for tool in tools {
+                dispatcher.register(Arc::new(tool));
+            }
+        }
+    }
+
+    tracing::debug!(
+        builtin = tools_config.get("builtin").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
+        mcp = dispatcher.len().saturating_sub(
+            tools_config.get("builtin").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
+        ),
+        total = dispatcher.len(),
+        "tool dispatcher built"
+    );
+
+    dispatcher
 }
 
 // ── Shared test utilities ────────────────────────────────────────
@@ -249,13 +369,14 @@ mod tests {
     }
 
     #[test]
-    fn dispatcher_tool_definitions() {
+    fn dispatcher_tool_definitions_openai_format() {
         let mut d = ToolDispatcher::new();
         d.register(Arc::new(EchoTool));
         let defs = d.tool_definitions();
         assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0]["name"], "echo");
-        assert!(defs[0]["input_schema"].is_object());
+        assert_eq!(defs[0]["type"], "function");
+        assert_eq!(defs[0]["function"]["name"], "echo");
+        assert!(defs[0]["function"]["parameters"].is_object());
     }
 
     #[test]
