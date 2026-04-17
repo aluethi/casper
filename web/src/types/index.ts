@@ -19,7 +19,7 @@ export interface Agent {
   description: string | null
   model_deployment: string
   prompt_stack: Record<string, unknown>[]
-  tools: { builtin?: { name: string; [key: string]: unknown }[]; mcp?: Record<string, unknown>[] }
+  tools: { builtin?: { name: string; [key: string]: unknown }[]; mcp?: McpServerConfig[] }
   config: Record<string, unknown>
   version: number
   tenant_id: string
@@ -29,16 +29,49 @@ export interface Agent {
   updated_at: string
 }
 
+export interface McpServerConfig {
+  name: string
+  url: string
+  api_key?: string
+}
+
 export interface Deployment {
   id: string
   slug: string
   name: string
   model_id: string
   tenant_id: string
-  is_active: boolean
+  backend_sequence: string[]
+  retry_attempts: number
+  retry_backoff_ms: number
+  fallback_enabled: boolean
+  timeout_ms: number
   default_params: Record<string, unknown>
+  rate_limit_rpm: number | null
+  fallback_deployment_id: string | null
+  is_active: boolean
   created_at: string
-  updated_at: string
+}
+
+export interface AvailableModel {
+  id: string
+  name: string
+  display_name: string
+  provider: string
+  context_window: number | null
+  max_output_tokens: number | null
+  cap_chat: boolean
+  cap_vision: boolean
+  cap_tool_use: boolean
+  cap_thinking: boolean
+}
+
+export interface AvailableBackend {
+  id: string
+  name: string
+  provider: string
+  region: string | null
+  priority: number
 }
 
 export interface ApiKey {

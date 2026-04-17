@@ -108,6 +108,17 @@ async fn export_agent(
     Ok((StatusCode::OK, headers, yaml).into_response())
 }
 
+/// GET /api/v1/agents/:name/prompt -- Preview the assembled system prompt.
+async fn preview_prompt(
+    State(state): State<AppState>,
+    guard: ScopeGuard,
+    Path(name): Path<String>,
+) -> Result<String, CasperError> {
+    guard.require("agents:manage")?;
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    agent_service::preview_prompt(&state.db_owner, &state.http_client, tenant_id, &name).await
+}
+
 /// POST /api/v1/agents/import -- Import agent from YAML body.
 async fn import_agent(
     State(state): State<AppState>,
@@ -130,5 +141,6 @@ pub fn agent_router() -> Router<AppState> {
             get(get_agent).patch(update_agent).delete(delete_agent),
         )
         .route("/api/v1/agents/{name}/export", get(export_agent))
+        .route("/api/v1/agents/{name}/prompt", get(preview_prompt))
         .route("/api/v1/agents/import", post(import_agent))
 }

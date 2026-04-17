@@ -27,6 +27,16 @@ impl WebFetchTool {
             max_response_bytes,
         }
     }
+
+    /// Construct from a tools-config JSON entry + a shared HTTP client.
+    /// Expected keys: `timeout_secs` (int), `max_response_bytes` (int).
+    pub fn from_config_with_client(config: &serde_json::Value, http_client: reqwest::Client) -> Self {
+        Self {
+            http_client,
+            timeout_secs: config.get("timeout_secs").and_then(|v| v.as_u64()).unwrap_or(30),
+            max_response_bytes: config.get("max_response_bytes").and_then(|v| v.as_u64()).unwrap_or(1_048_576) as usize,
+        }
+    }
 }
 
 #[async_trait]

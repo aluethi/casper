@@ -1,15 +1,16 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import api from '../lib/api'
-import type { Agent } from '../types'
+import { fetchSSE } from '../lib/sse'
+import type { Agent, Deployment, AvailableModel } from '../types'
 import PromptStackEditor, { type PromptBlock, type AvailableAgent } from './components/PromptStackEditor'
-import ToolsEditor from './components/ToolsEditor'
+import ToolsEditor, { type McpServer } from './components/ToolsEditor'
+import { ChatPanel } from '../components/chat'
+import type { ChatMessage, ToolCallBlock } from '../components/chat'
 
 interface TextBlock { type: 'text'; label: string; content: string }
 interface KnowledgeBlock { type: 'knowledge'; label: string; budget_tokens: number }
 interface DatasourceBlock { type: 'datasource'; label: string; source: Record<string, unknown>; budget_tokens: number; on_missing: string }
-
-interface ChatMessage { role: 'user' | 'assistant'; content: string; tool_calls?: { name: string; input: Record<string, unknown>; output?: string }[] }
 
 const tabs = ['Config', 'Chat', 'YAML'] as const
 type Tab = (typeof tabs)[number]
@@ -28,19 +29,28 @@ export default function AgentBuilderPage() {
   const [modelDeployment, setModelDeployment] = useState('')
   const [blocks, setBlocks] = useState<PromptBlock[]>([])
   const [builtinTools, setBuiltinTools] = useState<Record<string, Record<string, unknown>>>({})
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([])
   const [saving, setSaving] = useState(false)
 
   // Available agents (for delegates block)
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([])
 
+  // Deployments (for model deployment dropdown)
+  const [deployments, setDeployments] = useState<Deployment[]>([])
+  const [models, setModels] = useState<AvailableModel[]>([])
+
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
-  const chatEnd = useRef<HTMLDivElement>(null)
+  const [conversationId, setConversationId] = useState<string | null>(null)
 
   // YAML
   const [yaml, setYaml] = useState('')
+
+  // System prompt preview
+  const [systemPrompt, setSystemPrompt] = useState('')
+  const [showPrompt, setShowPrompt] = useState(false)
+  const [promptLoading, setPromptLoading] = useState(false)
 
   // Token budget estimate
   const totalTokens = blocks.reduce((sum, b) => {
@@ -64,6 +74,8 @@ export default function AgentBuilderPage() {
         const toolsData = a.tools?.builtin || []
         for (const t of toolsData) { bt[t.name] = { ...t }; delete bt[t.name].name }
         setBuiltinTools(bt)
+        // Parse MCP servers
+        setMcpServers((a.tools?.mcp || []) as McpServer[])
       })
       .catch(e => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -72,9 +84,16 @@ export default function AgentBuilderPage() {
       const list = (r.data.data || r.data || []) as AvailableAgent[]
       setAvailableAgents(list.filter(a => a.name !== name))
     }).catch(() => {})
+    // Fetch deployments + models for dropdown
+    Promise.all([
+      api.get('/api/v1/deployments?per_page=100'),
+      api.get('/api/v1/deployments/available-models'),
+    ]).then(([depRes, modRes]) => {
+      setDeployments((depRes.data.data ?? depRes.data).filter((d: Deployment) => d.is_active))
+      setModels(modRes.data)
+    }).catch(() => {})
   }, [name])
 
-  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => {
     if (tab === 'YAML') {
       api.get(`/api/v1/agents/${name}/export`).then(r => setYaml(typeof r.data === 'string' ? r.data : JSON.stringify(r.data, null, 2)))
@@ -89,7 +108,7 @@ export default function AgentBuilderPage() {
       await api.patch(`/api/v1/agents/${name}`, {
         display_name: displayName, description, model_deployment: modelDeployment,
         prompt_stack: blocks,
-        tools: { builtin, mcp: agent?.tools?.mcp || [] },
+        tools: { builtin, mcp: mcpServers },
       })
       // Reload
       const r = await api.get(`/api/v1/agents/${name}`)
@@ -98,18 +117,110 @@ export default function AgentBuilderPage() {
     finally { setSaving(false) }
   }
 
-  const sendMessage = async () => {
-    if (!input.trim() || sending) return
-    setMessages(m => [...m, { role: 'user', content: input }])
-    setInput(''); setSending(true)
+  const loadSystemPrompt = async () => {
+    if (showPrompt) { setShowPrompt(false); return }
+    setPromptLoading(true)
     try {
-      const res = await api.post(`/api/v1/agents/${name}/run`, { message: input })
-      const data = res.data
-      setMessages(m => [...m, { role: 'assistant', content: data.message?.content || data.content || JSON.stringify(data), tool_calls: data.tool_calls }])
+      const r = await api.get(`/api/v1/agents/${name}/prompt`)
+      setSystemPrompt(r.data)
+      setShowPrompt(true)
     } catch (e: any) {
-      setMessages(m => [...m, { role: 'assistant', content: `Error: ${e.response?.data?.message ?? e.message}` }])
-    } finally { setSending(false) }
+      setError(e.response?.data?.message ?? e.message)
+    } finally {
+      setPromptLoading(false)
+    }
   }
+
+  // Ref to accumulate streaming assistant message state without causing re-render per token
+  const streamRef = useRef({ thinking: '', content: '', toolCalls: [] as ToolCallBlock[] })
+  const abortRef = useRef<AbortController | null>(null)
+
+  const sendMessage = useCallback(async (text: string) => {
+    if (sending) return
+    setMessages(m => [...m, { role: 'user', content: text }])
+    setSending(true)
+
+    // Reset streaming accumulator and add placeholder assistant message
+    streamRef.current = { thinking: '', content: '', toolCalls: [] }
+    setMessages(m => [...m, { role: 'assistant', content: '' }])
+
+    // Helper to update the last (assistant) message from the ref
+    const flush = () => {
+      const s = streamRef.current
+      setMessages(m => {
+        const updated = [...m]
+        updated[updated.length - 1] = {
+          role: 'assistant',
+          content: s.content,
+          thinking: s.thinking || undefined,
+          toolCalls: s.toolCalls.length > 0 ? [...s.toolCalls] : undefined,
+        }
+        return updated
+      })
+    }
+
+    // Batch UI updates — flush at most every 50ms during fast streaming
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleFlush = () => {
+      if (!flushTimer) {
+        flushTimer = setTimeout(() => { flushTimer = null; flush() }, 50)
+      }
+    }
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
+      const body: Record<string, unknown> = { message: text }
+      if (conversationId) body.conversation_id = conversationId
+
+      await fetchSSE(`/api/v1/agents/${name}/run/stream`, body, {
+        onThinking(delta) {
+          streamRef.current.thinking += delta
+          scheduleFlush()
+        },
+        onContentDelta(delta) {
+          streamRef.current.content += delta
+          scheduleFlush()
+        },
+        onToolCallStart(id, tcName, input) {
+          streamRef.current.toolCalls.push({ id, name: tcName, input })
+          flush()
+        },
+        onToolResult(id, _tcName, content, isError) {
+          const tc = streamRef.current.toolCalls.find(t => t.id === id)
+          if (tc) { tc.result = content; tc.is_error = isError }
+          flush()
+        },
+        onDone(data) {
+          if (data.conversation_id) setConversationId(data.conversation_id)
+          if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+          flush()
+        },
+        onError(message) {
+          streamRef.current.content += `\n\nError: ${message}`
+          flush()
+        },
+      }, controller.signal)
+    } catch (e: unknown) {
+      if ((e as Error).name === 'AbortError') {
+        streamRef.current.content += '\n\n*Stopped.*'
+      } else {
+        const err = e as { message?: string }
+        streamRef.current.content = `Error: ${err.message ?? 'Unknown error'}`
+      }
+      flush()
+    } finally {
+      abortRef.current = null
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+      flush()
+      setSending(false)
+    }
+  }, [sending, conversationId, name])
+
+  const stopStream = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
 
   if (loading) return <p className="text-slate-500">Loading...</p>
   if (!agent) return <p className="text-red-600">{error || 'Agent not found'}</p>
@@ -150,8 +261,14 @@ export default function AgentBuilderPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-500 mb-1">Model Deployment</label>
-                  <input value={modelDeployment} onChange={e => setModelDeployment(e.target.value)}
-                    className="w-full rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none" placeholder="sonnet-fast" />
+                  <select value={modelDeployment} onChange={e => setModelDeployment(e.target.value)}
+                    className="w-full rounded-lg ring-1 ring-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                    <option value="">Select a deployment...</option>
+                    {deployments.map(d => {
+                      const m = models.find(x => x.id === d.model_id)
+                      return <option key={d.slug} value={d.slug}>{d.name} ({d.slug}){m ? ` \u2014 ${m.display_name}` : ''}</option>
+                    })}
+                  </select>
                 </div>
               </div>
               <div>
@@ -165,7 +282,7 @@ export default function AgentBuilderPage() {
             <PromptStackEditor blocks={blocks} setBlocks={setBlocks} totalTokens={totalTokens} availableAgents={availableAgents} />
 
             {/* Tools */}
-            <ToolsEditor builtinTools={builtinTools} setBuiltinTools={setBuiltinTools} />
+            <ToolsEditor builtinTools={builtinTools} setBuiltinTools={setBuiltinTools} mcpServers={mcpServers} setMcpServers={setMcpServers} />
 
             <button onClick={saveConfig} disabled={saving}
               className="bg-blue-600 text-white px-6 py-2.5 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors disabled:opacity-50">
@@ -198,7 +315,7 @@ export default function AgentBuilderPage() {
                 )}
               </div>
               <div className="mt-4 text-xs text-slate-400">
-                {blocks.length} blocks | {Object.keys(builtinTools).length} tools enabled
+                {blocks.length} blocks | {Object.keys(builtinTools).length} tools | {mcpServers.length} MCP {mcpServers.length === 1 ? 'server' : 'servers'}
               </div>
             </div>
           </div>
@@ -207,34 +324,34 @@ export default function AgentBuilderPage() {
 
       {/* Chat Tab */}
       {tab === 'Chat' && (
-        <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm flex flex-col" style={{ height: 'calc(100vh - 280px)' }}>
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {messages.length === 0 && <p className="text-slate-400 text-sm text-center mt-8">Send a message to start chatting with the agent.</p>}
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-sm ${m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-900'}`}>
-                  <p className="whitespace-pre-wrap">{m.content}</p>
-                  {m.tool_calls?.map((tc, j) => (
-                    <div key={j} className="mt-2 text-xs bg-white/20 rounded-lg p-2">
-                      <p className="font-semibold">Tool: {tc.name}</p>
-                      <pre className="mt-1 overflow-x-auto text-[11px]">{JSON.stringify(tc.input, null, 2)}</pre>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <div ref={chatEnd} />
-          </div>
-          <div className="border-t border-slate-200 p-3 flex gap-2">
-            <input value={input} onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
-              placeholder="Type a message..."
-              className="flex-1 rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none" />
-            <button onClick={sendMessage} disabled={sending}
-              className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 transition-colors disabled:opacity-50">
-              {sending ? '...' : 'Send'}
+        <div className="flex flex-col" style={{ height: 'calc(100vh - 280px)' }}>
+          {/* System prompt toggle */}
+          <div className="mb-3 flex items-center gap-3">
+            <button onClick={loadSystemPrompt} disabled={promptLoading}
+              className="rounded-lg ring-1 ring-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50">
+              {promptLoading ? 'Loading...' : showPrompt ? 'Hide System Prompt' : 'Show System Prompt'}
             </button>
+            <span className="text-xs text-slate-400">Debug: view the fully assembled prompt as sent to the model</span>
           </div>
+
+          {/* System prompt panel */}
+          {showPrompt && systemPrompt && (
+            <div className="mb-3 bg-amber-50 rounded-2xl ring-1 ring-amber-200 overflow-hidden" style={{ maxHeight: '40vh' }}>
+              <div className="flex items-center justify-between px-4 py-2 bg-amber-100/50 border-b border-amber-200">
+                <span className="text-xs font-semibold text-amber-800">System Prompt ({Math.ceil(systemPrompt.length / 4).toLocaleString()} est. tokens)</span>
+                <button onClick={() => setShowPrompt(false)} className="text-amber-600 hover:text-amber-800 text-xs">&times; Close</button>
+              </div>
+              <pre className="p-4 text-xs font-mono text-amber-900 whitespace-pre-wrap overflow-y-auto" style={{ maxHeight: 'calc(40vh - 36px)' }}>{systemPrompt}</pre>
+            </div>
+          )}
+
+          <ChatPanel
+            messages={messages}
+            loading={sending}
+            onSend={sendMessage}
+            onStop={stopStream}
+            emptyStateText="Send a message to start chatting with the agent"
+          />
         </div>
       )}
 

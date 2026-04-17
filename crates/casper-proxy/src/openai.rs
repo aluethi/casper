@@ -1,7 +1,9 @@
 use casper_base::CasperError;
+use futures::StreamExt;
 use serde_json::json;
+use tokio::sync::mpsc;
 
-use crate::types::{LlmRequest, LlmResponse, MessageRole};
+use crate::types::{LlmRequest, LlmResponse, MessageRole, StreamEvent};
 
 /// Send a request to an OpenAI-compatible Chat Completions API and parse the response.
 pub async fn call(
@@ -10,7 +12,16 @@ pub async fn call(
     api_key: &str,
     request: &LlmRequest,
 ) -> Result<LlmResponse, CasperError> {
-    let messages = build_messages(&request.messages);
+    let mut messages = build_messages(&request.messages);
+
+    // OpenAI uses system messages inline — if extra.system is set,
+    // prepend it as a system message (this is how the agent engine passes
+    // the assembled system prompt).
+    if let Some(system) = request.extra.get("system").and_then(|v| v.as_str()) {
+        if !system.is_empty() {
+            messages.insert(0, json!({ "role": "system", "content": system }));
+        }
+    }
 
     let mut body = json!({
         "model": request.model,
@@ -31,10 +42,13 @@ pub async fn call(
         }
     }
 
-    // Merge extra params
+    // Merge extra params (skip "system" — already handled above as a message)
     if let serde_json::Value::Object(ref extra) = request.extra {
         let body_obj = body.as_object_mut().unwrap();
         for (k, v) in extra {
+            if k == "system" {
+                continue;
+            }
             if !body_obj.contains_key(k) {
                 body_obj.insert(k.clone(), v.clone());
             }
@@ -74,15 +88,228 @@ pub async fn call(
     parse_response(&resp)
 }
 
-/// Build OpenAI-format messages array. OpenAI accepts system messages inline.
+/// Streaming variant: sends events to `tx` while accumulating the full response.
+pub async fn call_stream(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    request: &LlmRequest,
+    tx: mpsc::Sender<StreamEvent>,
+) -> Result<LlmResponse, CasperError> {
+    let mut messages = build_messages(&request.messages);
+
+    if let Some(system) = request.extra.get("system").and_then(|v| v.as_str()) {
+        if !system.is_empty() {
+            messages.insert(0, json!({ "role": "system", "content": system }));
+        }
+    }
+
+    let mut body = json!({
+        "model": request.model,
+        "messages": messages,
+        "stream": true,
+        "stream_options": { "include_usage": true },
+    });
+
+    if let Some(max_tokens) = request.max_tokens {
+        body["max_tokens"] = json!(max_tokens);
+    }
+    if let Some(temp) = request.temperature {
+        body["temperature"] = json!(temp);
+    }
+    if let Some(ref tools) = request.tools {
+        if !tools.is_empty() {
+            body["tools"] = json!(tools);
+        }
+    }
+
+    if let serde_json::Value::Object(ref extra) = request.extra {
+        let body_obj = body.as_object_mut().unwrap();
+        for (k, v) in extra {
+            if k == "system" { continue; }
+            if !body_obj.contains_key(k) {
+                body_obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    let base = base_url.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    };
+
+    let response = client
+        .post(&url)
+        .header("authorization", format!("Bearer {api_key}"))
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| CasperError::BadGateway(format!("OpenAI stream request failed: {e}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(map_openai_error(status.as_u16(), &text));
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    let mut content_parts = Vec::new();
+    let mut thinking_parts = Vec::new();
+    let mut model = String::new();
+    let mut input_tokens = 0i32;
+    let mut output_tokens = 0i32;
+    let mut cache_read_tokens: Option<i32> = None;
+    let mut finish_reason: Option<String> = None;
+
+    // Tool call accumulation: index → (id, name, arguments_buf)
+    let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
+
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| CasperError::BadGateway(format!("Stream read error: {e}")))?;
+        let chunk_str = String::from_utf8_lossy(&bytes);
+        buffer.push_str(&chunk_str.replace("\r\n", "\n").replace('\r', "\n"));
+
+        while let Some(pos) = buffer.find('\n') {
+            let line = buffer[..pos].to_string();
+            buffer = buffer[pos + 1..].to_string();
+
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(':') { continue; }
+            let data_str = match line.strip_prefix("data: ") {
+                Some(d) => d,
+                None => continue,
+            };
+            if data_str == "[DONE]" { continue; }
+
+            let data: serde_json::Value = match serde_json::from_str(data_str) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if let Some(m) = data["model"].as_str() {
+                if model.is_empty() { model = m.to_string(); }
+            }
+
+            // Usage (sent in the final chunk)
+            if let Some(u) = data.get("usage").filter(|v| v.is_object()) {
+                input_tokens = u["prompt_tokens"].as_i64().unwrap_or(0) as i32;
+                output_tokens = u["completion_tokens"].as_i64().unwrap_or(0) as i32;
+                cache_read_tokens = u["prompt_tokens_details"]["cached_tokens"].as_i64().map(|v| v as i32);
+            }
+
+            if let Some(choice) = data["choices"].as_array().and_then(|a| a.first()) {
+                let delta = &choice["delta"];
+
+                // Content
+                if let Some(c) = delta["content"].as_str() {
+                    if !c.is_empty() {
+                        content_parts.push(c.to_string());
+                        let _ = tx.send(StreamEvent::ContentDelta { delta: c.to_string() }).await;
+                    }
+                }
+
+                // Thinking / reasoning
+                if let Some(r) = delta["reasoning_content"].as_str() {
+                    if !r.is_empty() {
+                        thinking_parts.push(r.to_string());
+                        let _ = tx.send(StreamEvent::Thinking { delta: r.to_string() }).await;
+                    }
+                }
+
+                // Tool calls (streamed incrementally by index)
+                if let Some(tcs) = delta["tool_calls"].as_array() {
+                    for tc in tcs {
+                        let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                        let entry = tool_acc.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                        if let Some(id) = tc["id"].as_str() { entry.0 = id.to_string(); }
+                        if let Some(name) = tc["function"]["name"].as_str() { entry.1 = name.to_string(); }
+                        if let Some(args) = tc["function"]["arguments"].as_str() { entry.2.push_str(args); }
+                    }
+                }
+
+                // Finish reason
+                if let Some(fr) = choice["finish_reason"].as_str() {
+                    finish_reason = Some(fr.to_string());
+                }
+            }
+        }
+    }
+
+    // Emit accumulated tool calls
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut indices: Vec<usize> = tool_acc.keys().copied().collect();
+    indices.sort();
+    for idx in indices {
+        let (id, name, args) = tool_acc.remove(&idx).unwrap();
+        let input: serde_json::Value = serde_json::from_str(&args).unwrap_or(json!({}));
+        tool_calls.push(json!({
+            "id": id,
+            "type": "function",
+            "function": { "name": name, "arguments": args }
+        }));
+        let _ = tx.send(StreamEvent::ToolCallStart { id, name, input }).await;
+    }
+
+    let content = content_parts.join("");
+    let thinking = if thinking_parts.is_empty() { None } else { Some(thinking_parts.join("")) };
+
+    Ok(LlmResponse {
+        content,
+        role: MessageRole::Assistant,
+        model,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens: None,
+        tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+        finish_reason,
+        thinking,
+    })
+}
+
+/// Build OpenAI-format messages array from internal Message structs.
+///
+/// Handles three special cases beyond simple {role, content} messages:
+/// - Assistant messages with tool_calls: content has `tool_calls` + `content` fields
+/// - Tool result messages: content has `tool_call_id` + `content` fields
+/// - Everything else: passed through as {role, content}
 fn build_messages(messages: &[crate::types::Message]) -> Vec<serde_json::Value> {
     messages
         .iter()
         .map(|msg| {
-            json!({
-                "role": msg.role,
-                "content": msg.content,
-            })
+            if msg.role == MessageRole::Assistant && msg.content.get("tool_calls").is_some() {
+                // Assistant message with tool calls
+                let mut m = json!({ "role": "assistant" });
+                if let Some(c) = msg.content.get("content") {
+                    if !c.is_null() {
+                        m["content"] = c.clone();
+                    }
+                }
+                if let Some(tc) = msg.content.get("tool_calls") {
+                    m["tool_calls"] = tc.clone();
+                }
+                m
+            } else if msg.role == MessageRole::Tool {
+                // Tool result message
+                let mut m = json!({ "role": "tool" });
+                if let Some(id) = msg.content.get("tool_call_id") {
+                    m["tool_call_id"] = id.clone();
+                }
+                if let Some(c) = msg.content.get("content") {
+                    m["content"] = c.clone();
+                }
+                m
+            } else {
+                json!({
+                    "role": msg.role,
+                    "content": msg.content,
+                })
+            }
         })
         .collect()
 }
@@ -105,6 +332,11 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
         .as_str()
         .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_string())).ok())
         .unwrap_or(MessageRole::Assistant);
+
+    // Extract thinking / reasoning content (OpenAI o-series, DeepSeek, etc.)
+    let thinking = message.get("reasoning_content")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     // Extract tool calls if present
     let tool_calls = message["tool_calls"]
@@ -141,6 +373,7 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
         cache_write_tokens: None,
         tool_calls,
         finish_reason,
+        thinking,
     })
 }
 
@@ -185,6 +418,41 @@ mod tests {
         assert_eq!(built.len(), 2);
         assert_eq!(built[0]["role"], "system");
         assert_eq!(built[1]["role"], "user");
+    }
+
+    #[test]
+    fn build_messages_assistant_with_tool_calls() {
+        let messages = vec![Message {
+            role: MessageRole::Assistant,
+            content: json!({
+                "content": "Let me check.",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{\"q\":\"test\"}"}
+                }]
+            }),
+        }];
+
+        let built = build_messages(&messages);
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0]["role"], "assistant");
+        assert_eq!(built[0]["content"], "Let me check.");
+        assert_eq!(built[0]["tool_calls"][0]["function"]["name"], "search");
+    }
+
+    #[test]
+    fn build_messages_tool_result() {
+        let messages = vec![Message {
+            role: MessageRole::Tool,
+            content: json!({"tool_call_id": "call_1", "content": "result data"}),
+        }];
+
+        let built = build_messages(&messages);
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0]["role"], "tool");
+        assert_eq!(built[0]["tool_call_id"], "call_1");
+        assert_eq!(built[0]["content"], "result data");
     }
 
     #[test]

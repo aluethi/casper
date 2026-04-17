@@ -6,10 +6,11 @@
 //! (dispatch with retry/fallback).
 
 use casper_base::CasperError;
-use casper_proxy::{LlmRequest, LlmResponse};
+use casper_proxy::{LlmRequest, LlmResponse, StreamEvent};
 #[cfg(test)]
 use casper_proxy::MessageRole;
 use sqlx::PgPool;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 /// Trait abstracting LLM calls so we can mock in tests.
@@ -20,6 +21,25 @@ pub trait LlmCaller: Send + Sync {
         tenant_id: Uuid,
         request: &LlmRequest,
     ) -> Result<(LlmResponse, Option<Uuid>), CasperError>;
+
+    /// Streaming variant: sends events to `tx` and returns the accumulated response.
+    /// Default implementation falls back to non-streaming.
+    async fn call_stream(
+        &self,
+        tenant_id: Uuid,
+        request: &LlmRequest,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Result<(LlmResponse, Option<Uuid>), CasperError> {
+        let (response, backend_id) = self.call(tenant_id, request).await?;
+        // Emit the buffered response as stream events
+        if let Some(ref thinking) = response.thinking {
+            let _ = tx.send(StreamEvent::Thinking { delta: thinking.clone() }).await;
+        }
+        if !response.content.is_empty() {
+            let _ = tx.send(StreamEvent::ContentDelta { delta: response.content.clone() }).await;
+        }
+        Ok((response, backend_id))
+    }
 }
 
 /// Real LLM caller that uses casper-catalog + casper-proxy.
@@ -35,14 +55,10 @@ impl LlmCaller for RealLlmCaller {
         tenant_id: Uuid,
         request: &LlmRequest,
     ) -> Result<(LlmResponse, Option<Uuid>), CasperError> {
-        // Resolve the deployment from the model field (which is the deployment slug)
         let deployment =
             casper_catalog::resolve_deployment(&self.db, tenant_id, &request.model).await?;
-
-        // Check quota
         casper_catalog::check_quota(&self.db, tenant_id, deployment.model_id).await?;
 
-        // Merge default params
         let merged_extra =
             casper_catalog::merge_params(&deployment.default_params, &request.extra);
 
@@ -50,9 +66,33 @@ impl LlmCaller for RealLlmCaller {
         patched_request.model = deployment.model_name.clone();
         patched_request.extra = merged_extra;
 
-        // Dispatch with retry/fallback
         let (response, backend) =
             casper_proxy::dispatch_with_retry(&self.http_client, &deployment, &patched_request)
+                .await?;
+
+        Ok((response, Some(backend.id)))
+    }
+
+    async fn call_stream(
+        &self,
+        tenant_id: Uuid,
+        request: &LlmRequest,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Result<(LlmResponse, Option<Uuid>), CasperError> {
+        let deployment =
+            casper_catalog::resolve_deployment(&self.db, tenant_id, &request.model).await?;
+        casper_catalog::check_quota(&self.db, tenant_id, deployment.model_id).await?;
+
+        let merged_extra =
+            casper_catalog::merge_params(&deployment.default_params, &request.extra);
+
+        let mut patched_request = request.clone();
+        patched_request.model = deployment.model_name.clone();
+        patched_request.extra = merged_extra;
+        patched_request.stream = true;
+
+        let (response, backend) =
+            casper_proxy::dispatch_stream_with_retry(&self.http_client, &deployment, &patched_request, tx)
                 .await?;
 
         Ok((response, Some(backend.id)))
@@ -89,6 +129,7 @@ impl MockLlmCaller {
             cache_write_tokens: Some(0),
             tool_calls: None,
             finish_reason: Some("end_turn".to_string()),
+            thinking: None,
         }])
     }
 
@@ -110,6 +151,7 @@ impl MockLlmCaller {
                     "input": tool_input,
                 })]),
                 finish_reason: Some("tool_use".to_string()),
+                thinking: None,
             },
             LlmResponse {
                 content: final_text.to_string(),
@@ -121,6 +163,7 @@ impl MockLlmCaller {
                 cache_write_tokens: Some(0),
                 tool_calls: None,
                 finish_reason: Some("end_turn".to_string()),
+                thinking: None,
             },
         ])
     }

@@ -28,6 +28,7 @@ pub struct CreateDeploymentRequest {
     #[serde(default = "default_json_obj")]
     pub default_params: serde_json::Value,
     pub rate_limit_rpm: Option<i32>,
+    pub fallback_deployment_id: Option<Uuid>,
 }
 
 fn default_retry_attempts() -> i32 { 1 }
@@ -47,6 +48,19 @@ pub struct UpdateDeploymentRequest {
     pub timeout_ms: Option<i32>,
     pub default_params: Option<serde_json::Value>,
     pub rate_limit_rpm: Option<i32>,
+    /// None = don't change, Some(None) = clear, Some(Some(id)) = set.
+    #[serde(default, deserialize_with = "deserialize_optional_nullable")]
+    pub fallback_deployment_id: Option<Option<Uuid>>,
+}
+
+/// Distinguishes absent field (→ None) from explicit null (→ Some(None)).
+fn deserialize_optional_nullable<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<Uuid>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<Uuid>::deserialize(deserializer)?))
 }
 
 #[derive(Serialize)]
@@ -63,6 +77,7 @@ pub struct DeploymentResponse {
     pub timeout_ms: i32,
     pub default_params: serde_json::Value,
     pub rate_limit_rpm: Option<i32>,
+    pub fallback_deployment_id: Option<Uuid>,
     pub is_active: bool,
     pub created_at: String,
 }
@@ -81,6 +96,7 @@ struct DeploymentRow {
     timeout_ms: i32,
     default_params: serde_json::Value,
     rate_limit_rpm: Option<i32>,
+    fallback_deployment_id: Option<Uuid>,
     is_active: bool,
     created_at: OffsetDateTime,
 }
@@ -99,6 +115,7 @@ fn row_to_response(r: DeploymentRow) -> DeploymentResponse {
         timeout_ms: r.timeout_ms,
         default_params: r.default_params,
         rate_limit_rpm: r.rate_limit_rpm,
+        fallback_deployment_id: r.fallback_deployment_id,
         is_active: r.is_active,
         created_at: to_rfc3339(r.created_at),
     }
@@ -107,7 +124,7 @@ fn row_to_response(r: DeploymentRow) -> DeploymentResponse {
 const DEPLOYMENT_COLUMNS: &str =
     "id, tenant_id, model_id, name, slug, \
      backend_sequence, retry_attempts, retry_backoff_ms, fallback_enabled, timeout_ms, \
-     default_params, rate_limit_rpm, is_active, created_at";
+     default_params, rate_limit_rpm, fallback_deployment_id, is_active, created_at";
 
 #[derive(Serialize)]
 pub struct TestRouteResponse {
@@ -193,8 +210,8 @@ pub async fn create(
         "INSERT INTO model_deployments (
             id, tenant_id, model_id, name, slug,
             backend_sequence, retry_attempts, retry_backoff_ms, fallback_enabled, timeout_ms,
-            default_params, rate_limit_rpm
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            default_params, rate_limit_rpm, fallback_deployment_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING {DEPLOYMENT_COLUMNS}"
     ))
     .bind(id)
@@ -209,6 +226,7 @@ pub async fn create(
     .bind(req.timeout_ms)
     .bind(&req.default_params)
     .bind(req.rate_limit_rpm)
+    .bind(req.fallback_deployment_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
@@ -307,17 +325,27 @@ pub async fn update(
     let mut tx = tdb.begin().await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
+    // fallback_deployment_id is Option<Option<Uuid>>:
+    //   None          → don't change
+    //   Some(None)    → clear to NULL
+    //   Some(Some(v)) → set to v
+    let (update_fallback, fallback_val): (bool, Option<Uuid>) = match &req.fallback_deployment_id {
+        None => (false, None),
+        Some(inner) => (true, *inner),
+    };
+
     let row: Option<DeploymentRow> = sqlx::query_as(&format!(
         "UPDATE model_deployments SET
-            name                = COALESCE($3, name),
-            slug                = COALESCE($4, slug),
-            backend_sequence    = COALESCE($5, backend_sequence),
-            retry_attempts      = COALESCE($6, retry_attempts),
-            retry_backoff_ms    = COALESCE($7, retry_backoff_ms),
-            fallback_enabled    = COALESCE($8, fallback_enabled),
-            timeout_ms          = COALESCE($9, timeout_ms),
-            default_params      = COALESCE($10, default_params),
-            rate_limit_rpm      = COALESCE($11, rate_limit_rpm)
+            name                    = COALESCE($3, name),
+            slug                    = COALESCE($4, slug),
+            backend_sequence        = COALESCE($5, backend_sequence),
+            retry_attempts          = COALESCE($6, retry_attempts),
+            retry_backoff_ms        = COALESCE($7, retry_backoff_ms),
+            fallback_enabled        = COALESCE($8, fallback_enabled),
+            timeout_ms              = COALESCE($9, timeout_ms),
+            default_params          = COALESCE($10, default_params),
+            rate_limit_rpm          = COALESCE($11, rate_limit_rpm),
+            fallback_deployment_id  = CASE WHEN $12 THEN $13 ELSE fallback_deployment_id END
          WHERE id = $1 AND tenant_id = $2
          RETURNING {DEPLOYMENT_COLUMNS}"
     ))
@@ -332,6 +360,8 @@ pub async fn update(
     .bind(req.timeout_ms)
     .bind(&req.default_params)
     .bind(req.rate_limit_rpm)
+    .bind(update_fallback)
+    .bind(fallback_val)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| match e {
@@ -447,4 +477,117 @@ pub async fn test_route(
         model_id,
         backends: resolved,
     })
+}
+
+// ── Available models / backends for deployment form ───────────────
+
+#[derive(Serialize)]
+pub struct AvailableModel {
+    pub id: Uuid,
+    pub name: String,
+    pub display_name: String,
+    pub provider: String,
+    pub context_window: Option<i32>,
+    pub max_output_tokens: Option<i32>,
+    pub cap_chat: bool,
+    pub cap_vision: bool,
+    pub cap_tool_use: bool,
+    pub cap_thinking: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct AvailableModelRow {
+    id: Uuid,
+    name: String,
+    display_name: String,
+    provider: String,
+    context_window: Option<i32>,
+    max_output_tokens: Option<i32>,
+    cap_chat: bool,
+    cap_vision: bool,
+    cap_tool_use: bool,
+    cap_thinking: bool,
+}
+
+/// Returns published, active models for which the tenant has a quota.
+pub async fn available_models(
+    db: &PgPool,
+    tenant_id: TenantId,
+) -> Result<Vec<AvailableModel>, CasperError> {
+    let rows: Vec<AvailableModelRow> = sqlx::query_as(
+        "SELECT m.id, m.name, m.display_name, m.provider,
+                m.context_window, m.max_output_tokens,
+                m.cap_chat, m.cap_vision, m.cap_tool_use, m.cap_thinking
+         FROM models m
+         JOIN model_quotas mq ON mq.model_id = m.id AND mq.tenant_id = $1
+         WHERE m.published = true AND m.is_active = true
+         ORDER BY m.provider, m.display_name",
+    )
+    .bind(tenant_id.0)
+    .fetch_all(db)
+    .await
+    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| AvailableModel {
+            id: r.id,
+            name: r.name,
+            display_name: r.display_name,
+            provider: r.provider,
+            context_window: r.context_window,
+            max_output_tokens: r.max_output_tokens,
+            cap_chat: r.cap_chat,
+            cap_vision: r.cap_vision,
+            cap_tool_use: r.cap_tool_use,
+            cap_thinking: r.cap_thinking,
+        })
+        .collect())
+}
+
+#[derive(Serialize)]
+pub struct AvailableBackend {
+    pub id: Uuid,
+    pub name: String,
+    pub provider: String,
+    pub region: Option<String>,
+    pub priority: i32,
+}
+
+#[derive(sqlx::FromRow)]
+struct AvailableBackendRow {
+    id: Uuid,
+    name: String,
+    provider: String,
+    region: Option<String>,
+    priority: i32,
+}
+
+/// Returns active backends assigned to a model (via platform_backend_models).
+pub async fn available_backends(
+    db: &PgPool,
+    model_id: Uuid,
+) -> Result<Vec<AvailableBackend>, CasperError> {
+    let rows: Vec<AvailableBackendRow> = sqlx::query_as(
+        "SELECT pb.id, pb.name, pb.provider, pb.region, pbm.priority
+         FROM platform_backend_models pbm
+         JOIN platform_backends pb ON pb.id = pbm.backend_id
+         WHERE pbm.model_id = $1 AND pb.is_active = true
+         ORDER BY pbm.priority",
+    )
+    .bind(model_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| AvailableBackend {
+            id: r.id,
+            name: r.name,
+            provider: r.provider,
+            region: r.region,
+            priority: r.priority,
+        })
+        .collect())
 }

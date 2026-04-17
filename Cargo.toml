@@ -59,6 +59,7 @@ prometheus = "0.13"
 # Concurrent state
 dashmap = "6"
 tokio-util = { version = "0.7", features = ["rt"] }
+tokio-stream = "0.1"
 
 # UUIDs
 uuid = { version = "1", features = ["v7", "serde"] }

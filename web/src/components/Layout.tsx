@@ -7,6 +7,7 @@ const navSections = [
     links: [
       { to: '/catalog', label: 'Catalog' },
       { to: '/deployments', label: 'Deployments' },
+      { to: '/playground', label: 'Playground' },
       { to: '/keys', label: 'API Keys' },
     ],
   },

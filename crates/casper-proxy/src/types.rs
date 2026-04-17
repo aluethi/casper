@@ -70,4 +70,43 @@ pub struct LlmResponse {
     pub cache_write_tokens: Option<i32>,
     pub tool_calls: Option<Vec<serde_json::Value>>,
     pub finish_reason: Option<String>,
+    /// Model reasoning/thinking content (Anthropic thinking blocks, OpenAI reasoning_content).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+}
+
+/// A single streaming event, normalized across providers.
+///
+/// Sent from the proxy layer through the engine to the SSE endpoint.
+/// The `event` tag matches the SSE `event:` field name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum StreamEvent {
+    /// Extended thinking / reasoning tokens.
+    Thinking { delta: String },
+    /// Content token(s) from the LLM.
+    ContentDelta { delta: String },
+    /// The LLM is requesting a tool call (emitted with full accumulated input).
+    ToolCallStart {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// Result of executing a tool.
+    ToolResult {
+        id: String,
+        name: String,
+        content: String,
+        is_error: bool,
+    },
+    /// Stream finished. Carries conversation ID and final usage.
+    Done {
+        conversation_id: String,
+        input_tokens: i32,
+        output_tokens: i32,
+        cache_read_tokens: Option<i32>,
+        cache_write_tokens: Option<i32>,
+    },
+    /// Unrecoverable error.
+    Error { message: String },
 }

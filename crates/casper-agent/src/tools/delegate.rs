@@ -1,7 +1,8 @@
 //! `delegate` tool: delegates a task to another agent.
 //!
-//! Returns a sentinel value that the engine interprets to route the message
-//! to the specified sub-agent. Not wired to the actor system yet.
+//! Returns a `__delegate__` sentinel that the engine intercepts. The engine
+//! then spawns a child agent run in an ephemeral conversation with timeout
+//! and depth-limit enforcement. See `engine::helpers::execute_delegation`.
 
 use async_trait::async_trait;
 use casper_base::CasperError;
@@ -10,7 +11,7 @@ use serde_json::json;
 use super::{Tool, ToolContext, ToolResult};
 
 /// Built-in tool that delegates a task to another agent.
-/// The engine checks for `__delegate__: true` in the result and routes accordingly.
+/// Returns a sentinel that the engine intercepts to run the child agent.
 pub struct DelegateTool;
 
 #[async_trait]

@@ -1,3 +1,4 @@
+use casper_agent::prompt::assemble_system_prompt;
 use casper_base::{CasperError, TenantId};
 use casper_db::TenantDb;
 use serde::{Deserialize, Serialize};
@@ -438,4 +439,67 @@ pub async fn import_yaml(
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(row)
+}
+
+/// Assemble and return the full system prompt for an agent (for debugging).
+///
+/// Uses the same pipeline as the agent engine: builds a tool dispatcher
+/// (which discovers MCP tools), then assembles the prompt with full tool docs.
+pub async fn preview_prompt(
+    db: &PgPool,
+    http_client: &reqwest::Client,
+    tenant_id: TenantId,
+    name: &str,
+) -> Result<String, CasperError> {
+    let tdb = TenantDb::new(db.clone(), tenant_id);
+    let mut tx = tdb
+        .begin()
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    let row: Option<(String, Option<String>, serde_json::Value, serde_json::Value)> =
+        sqlx::query_as(
+            "SELECT name, description, prompt_stack, tools
+             FROM agents WHERE tenant_id = $1 AND name = $2 AND is_active = true",
+        )
+        .bind(tenant_id.0)
+        .bind(name)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+
+    let (agent_name, description, prompt_stack, tools) =
+        row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
+
+    let tenant_name: String = sqlx::query_scalar(
+        "SELECT display_name FROM tenants WHERE id = $1",
+    )
+    .bind(tenant_id.0)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "Unknown".to_string());
+
+    // Discover MCP tools so the preview includes their documentation
+    let dispatcher = casper_agent::tools::build_dispatcher(&tools, http_client).await;
+    let mcp_summaries = dispatcher.mcp_tool_summaries();
+
+    let prompt = assemble_system_prompt(
+        &prompt_stack,
+        &tools,
+        &agent_name,
+        description.as_deref().unwrap_or(""),
+        tenant_id.0,
+        &tenant_name,
+        db,
+        &mcp_summaries,
+    )
+    .await;
+
+    Ok(prompt)
 }

@@ -39,6 +39,7 @@ bigdecimal = "0.4"
 reqwest = { workspace = true }
 dashmap = { workspace = true }
 futures = { workspace = true }
+tokio-stream = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }

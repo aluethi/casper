@@ -180,6 +180,7 @@ impl AgentBackendRegistry {
                     cache_write_tokens: usage.cache_write_tokens,
                     tool_calls: msg.tool_calls,
                     finish_reason: resp.stop_reason.or(Some("stop".to_string())),
+                    thinking: None,
                 })
             }
             Ok(Ok(WsMessage::InferenceError(err))) => {

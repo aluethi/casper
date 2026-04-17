@@ -1,17 +1,20 @@
 use crate::types::{JsonRpcRequest, JsonRpcResponse, McpError, McpToolDef};
 use serde_json::json;
+use tokio::sync::OnceCell;
 use tracing::debug;
 
 /// Client for communicating with an MCP (Model Context Protocol) server.
 ///
-/// MCP uses JSON-RPC 2.0 over HTTP (with optional SSE streaming).
-/// This V1 implementation covers the basic request/response flow;
-/// SSE streaming will be added in a future iteration.
+/// MCP uses JSON-RPC 2.0 over HTTP. The server requires an `initialize`
+/// handshake before any other calls. The returned `Mcp-Session-Id` header
+/// must be sent on all subsequent requests.
 pub struct McpClient {
     url: String,
     auth_token: Option<String>,
     http_client: reqwest::Client,
     next_id: std::sync::atomic::AtomicU64,
+    /// Session ID obtained from the `initialize` handshake.
+    session_id: OnceCell<String>,
 }
 
 impl McpClient {
@@ -26,12 +29,65 @@ impl McpClient {
             auth_token,
             http_client,
             next_id: std::sync::atomic::AtomicU64::new(1),
+            session_id: OnceCell::new(),
         }
     }
 
     /// Return the base URL this client is configured to talk to.
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// Perform the MCP `initialize` handshake and capture the session ID.
+    async fn ensure_initialized(&self) -> Result<&str, McpError> {
+        self.session_id
+            .get_or_try_init(|| async {
+                let id = self
+                    .next_id
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0",
+                    id,
+                    method: "initialize",
+                    params: json!({
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "casper",
+                            "version": "0.1.0"
+                        }
+                    }),
+                };
+
+                let mut http_req = self.http_client.post(&self.url).json(&request);
+                if let Some(ref token) = self.auth_token {
+                    http_req = http_req.bearer_auth(token);
+                }
+
+                let http_resp = http_req.send().await?;
+
+                let sid = http_resp
+                    .headers()
+                    .get("mcp-session-id")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+
+                let rpc_resp: JsonRpcResponse = http_resp.json().await?;
+
+                if let Some(err) = rpc_resp.error {
+                    return Err(McpError::JsonRpc {
+                        code: err.code,
+                        message: err.message,
+                    });
+                }
+
+                debug!(session_id = %sid, "MCP session initialized");
+                Ok(sid)
+            })
+            .await
+            .map(|s| s.as_str())
     }
 
     /// Discover available tools by calling `tools/list` on the MCP server.
@@ -74,6 +130,8 @@ impl McpClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, McpError> {
+        self.ensure_initialized().await?;
+
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -89,6 +147,13 @@ impl McpClient {
 
         if let Some(ref token) = self.auth_token {
             http_req = http_req.bearer_auth(token);
+        }
+
+        // Attach session ID from the initialize handshake
+        if let Some(sid) = self.session_id.get() {
+            if !sid.is_empty() {
+                http_req = http_req.header("Mcp-Session-Id", sid);
+            }
         }
 
         let http_resp = http_req.send().await?;
