@@ -1,7 +1,7 @@
 use casper_base::CasperError;
 use serde_json::json;
 
-use crate::types::{LlmRequest, LlmResponse};
+use crate::types::{LlmRequest, LlmResponse, MessageRole};
 
 /// Send a request to an OpenAI-compatible Chat Completions API and parse the response.
 pub async fn call(
@@ -101,10 +101,10 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
         .unwrap_or("")
         .to_string();
 
-    let role = message["role"]
+    let role: MessageRole = message["role"]
         .as_str()
-        .unwrap_or("assistant")
-        .to_string();
+        .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_string())).ok())
+        .unwrap_or(MessageRole::Assistant);
 
     // Extract tool calls if present
     let tool_calls = message["tool_calls"]
@@ -172,11 +172,11 @@ mod tests {
     fn build_messages_preserves_system() {
         let messages = vec![
             Message {
-                role: "system".to_string(),
+                role: MessageRole::System,
                 content: json!("You are helpful"),
             },
             Message {
-                role: "user".to_string(),
+                role: MessageRole::User,
                 content: json!("Hi"),
             },
         ];
@@ -210,7 +210,7 @@ mod tests {
 
         let llm = parse_response(&resp).unwrap();
         assert_eq!(llm.content, "Hello! How can I help?");
-        assert_eq!(llm.role, "assistant");
+        assert_eq!(llm.role, MessageRole::Assistant);
         assert_eq!(llm.model, "gpt-4o");
         assert_eq!(llm.input_tokens, 20);
         assert_eq!(llm.output_tokens, 8);

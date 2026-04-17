@@ -10,22 +10,29 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
+use crate::helpers::to_rfc3339;
+use crate::pagination::{PaginationParams, PaginatedResponse, Pagination};
 
-fn to_rfc3339(dt: OffsetDateTime) -> String {
-    dt.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
+#[derive(sqlx::FromRow)]
+struct TenantRow {
+    id: Uuid,
+    slug: String,
+    display_name: String,
+    status: String,
+    settings: serde_json::Value,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
 }
-
-type TenantRow = (Uuid, String, String, String, serde_json::Value, OffsetDateTime, OffsetDateTime);
 
 fn row_to_response(r: TenantRow) -> TenantResponse {
     TenantResponse {
-        id: r.0,
-        slug: r.1,
-        display_name: r.2,
-        status: r.3,
-        settings: r.4,
-        created_at: to_rfc3339(r.5),
-        updated_at: to_rfc3339(r.6),
+        id: r.id,
+        slug: r.slug,
+        display_name: r.display_name,
+        status: r.status,
+        settings: r.settings,
+        created_at: to_rfc3339(r.created_at),
+        updated_at: to_rfc3339(r.updated_at),
     }
 }
 
@@ -57,30 +64,6 @@ pub struct TenantResponse {
     pub settings: serde_json::Value,
     pub created_at: String,
     pub updated_at: String,
-}
-
-#[derive(Deserialize)]
-pub struct PaginationParams {
-    #[serde(default = "default_page")]
-    pub page: i64,
-    #[serde(default = "default_per_page")]
-    pub per_page: i64,
-}
-
-fn default_page() -> i64 { 1 }
-fn default_per_page() -> i64 { 50 }
-
-#[derive(Serialize)]
-pub struct PaginatedResponse<T> {
-    pub data: Vec<T>,
-    pub pagination: Pagination,
-}
-
-#[derive(Serialize)]
-pub struct Pagination {
-    pub page: i64,
-    pub per_page: i64,
-    pub total: i64,
 }
 
 /// POST /api/v1/tenants — Create tenant + owner user.
@@ -156,7 +139,7 @@ async fn list_tenants(
 ) -> Result<Json<PaginatedResponse<TenantResponse>>, CasperError> {
     guard.require("platform:admin")?;
 
-    let offset = (params.page - 1) * params.per_page;
+    let offset = params.offset();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tenants")
         .fetch_one(&state.db_owner)
@@ -167,7 +150,7 @@ async fn list_tenants(
             "SELECT id, slug, display_name, status, settings, created_at, updated_at
              FROM tenants ORDER BY created_at DESC LIMIT $1 OFFSET $2"
         )
-        .bind(params.per_page)
+        .bind(params.limit())
         .bind(offset)
         .fetch_all(&state.db_owner)
         .await

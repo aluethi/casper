@@ -163,7 +163,7 @@ mod tests {
     }
 
     fn make_claims() -> CasperClaims {
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         CasperClaims {
             sub: "user:alice@ventoo.ch".to_string(),
             tid: Uuid::nil(),
@@ -191,7 +191,7 @@ mod tests {
     fn expired_rejected() {
         let (_, encoding_key, verifier) = make_keypair();
         let mut claims = make_claims();
-        claims.exp = chrono::Utc::now().timestamp() - 100;
+        claims.exp = time::OffsetDateTime::now_utc().unix_timestamp() - 100;
 
         let token = sign_token(&encoding_key, &claims);
         assert!(matches!(verifier.verify(&token), Err(CasperError::Unauthorized)));

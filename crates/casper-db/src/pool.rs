@@ -54,12 +54,10 @@ impl TenantDb {
     /// SET LOCAL only lasts for the transaction, so RLS is automatically cleaned up.
     pub async fn begin(&self) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(&format!(
-            "SET LOCAL app.tenant_id = '{}'",
-            self.tenant_id.0
-        ))
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("SELECT set_config('app.tenant_id', $1::text, true)")
+            .bind(self.tenant_id.0.to_string())
+            .execute(&mut *tx)
+            .await?;
         Ok(tx)
     }
 
@@ -69,12 +67,10 @@ impl TenantDb {
         &self,
     ) -> Result<sqlx::pool::PoolConnection<Postgres>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
-        sqlx::query(&format!(
-            "SET LOCAL app.tenant_id = '{}'",
-            self.tenant_id.0
-        ))
-        .execute(&mut *conn)
-        .await?;
+        sqlx::query("SELECT set_config('app.tenant_id', $1::text, true)")
+            .bind(self.tenant_id.0.to_string())
+            .execute(&mut *conn)
+            .await?;
         Ok(conn)
     }
 }

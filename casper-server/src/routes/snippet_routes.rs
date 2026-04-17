@@ -4,153 +4,52 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-
-fn to_rfc3339(dt: OffsetDateTime) -> String {
-    dt.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
-}
-
-/// Estimate token count: ~4 characters per token.
-fn estimate_tokens(text: &str) -> i32 {
-    (text.len() / 4).max(0) as i32
-}
-
-// ── Types ─────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct CreateSnippetRequest {
-    pub name: String,
-    pub display_name: String,
-    pub content: String,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateSnippetRequest {
-    pub name: Option<String>,
-    pub display_name: Option<String>,
-    pub content: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct SnippetResponse {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub name: String,
-    pub display_name: String,
-    pub content: String,
-    pub token_estimate: i32,
-    pub created_at: String,
-    pub updated_at: String,
-    pub created_by: String,
-}
-
-type SnippetRow = (Uuid, Uuid, String, String, String, i32, OffsetDateTime, OffsetDateTime, String);
-
-fn row_to_response(r: SnippetRow) -> SnippetResponse {
-    SnippetResponse {
-        id: r.0,
-        tenant_id: r.1,
-        name: r.2,
-        display_name: r.3,
-        content: r.4,
-        token_estimate: r.5,
-        created_at: to_rfc3339(r.6),
-        updated_at: to_rfc3339(r.7),
-        created_by: r.8,
-    }
-}
+use crate::services::snippet_service::{
+    self, CreateSnippetRequest, SnippetResponse, UpdateSnippetRequest,
+};
 
 // ── Handlers ──────────────────────────────────────────────────────
 
-/// POST /api/v1/snippets — Create snippet.
+/// POST /api/v1/snippets -- Create snippet.
 async fn create_snippet(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Json(body): Json<CreateSnippetRequest>,
 ) -> Result<Json<SnippetResponse>, CasperError> {
     guard.require("agents:manage")?;
-
-    let tenant_id = guard.0.tenant_id.0;
-    let id = Uuid::now_v7();
-    let token_estimate = estimate_tokens(&body.content);
-
-    let row: SnippetRow = sqlx::query_as(
-        "INSERT INTO snippets (id, tenant_id, name, display_name, content, token_estimate, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, tenant_id, name, display_name, content, token_estimate, created_at, updated_at, created_by"
-    )
-    .bind(id)
-    .bind(tenant_id)
-    .bind(&body.name)
-    .bind(&body.display_name)
-    .bind(&body.content)
-    .bind(token_estimate)
-    .bind(guard.0.actor())
-    .fetch_one(&state.db_owner)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("snippets_tenant_id_name_key") => {
-            CasperError::Conflict(format!("snippet '{}' already exists", body.name))
-        }
-        _ => CasperError::Internal(format!("DB error: {e}")),
-    })?;
-
-    Ok(Json(row_to_response(row)))
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let result = snippet_service::create(&state.db, tenant_id, &body, &guard.0.actor()).await?;
+    Ok(Json(result))
 }
 
-/// GET /api/v1/snippets — List snippets for tenant.
+/// GET /api/v1/snippets -- List snippets for tenant.
 async fn list_snippets(
     State(state): State<AppState>,
     guard: ScopeGuard,
 ) -> Result<Json<Vec<SnippetResponse>>, CasperError> {
     guard.require("agents:manage")?;
-
-    let tenant_id = guard.0.tenant_id.0;
-
-    let rows: Vec<SnippetRow> = sqlx::query_as(
-        "SELECT id, tenant_id, name, display_name, content, token_estimate, created_at, updated_at, created_by
-         FROM snippets WHERE tenant_id = $1
-         ORDER BY name"
-    )
-    .bind(tenant_id)
-    .fetch_all(&state.db_owner)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let data = rows.into_iter().map(row_to_response).collect();
-    Ok(Json(data))
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let result = snippet_service::list(&state.db, tenant_id).await?;
+    Ok(Json(result))
 }
 
-/// GET /api/v1/snippets/:id — Get single snippet.
+/// GET /api/v1/snippets/:id -- Get single snippet.
 async fn get_snippet(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SnippetResponse>, CasperError> {
     guard.require("agents:manage")?;
-
-    let tenant_id = guard.0.tenant_id.0;
-
-    let row: Option<SnippetRow> = sqlx::query_as(
-        "SELECT id, tenant_id, name, display_name, content, token_estimate, created_at, updated_at, created_by
-         FROM snippets WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db_owner)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("snippet {id}")))?;
-    Ok(Json(row_to_response(r)))
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let result = snippet_service::get(&state.db, tenant_id, id).await?;
+    Ok(Json(result))
 }
 
-/// PATCH /api/v1/snippets/:id — Update snippet (recompute token_estimate if content changes).
+/// PATCH /api/v1/snippets/:id -- Update snippet (recompute token_estimate if content changes).
 async fn update_snippet(
     State(state): State<AppState>,
     guard: ScopeGuard,
@@ -158,63 +57,21 @@ async fn update_snippet(
     Json(body): Json<UpdateSnippetRequest>,
 ) -> Result<Json<SnippetResponse>, CasperError> {
     guard.require("agents:manage")?;
-
-    let tenant_id = guard.0.tenant_id.0;
-
-    // If content is being updated, compute new token_estimate
-    let new_token_estimate: Option<i32> = body.content.as_ref().map(|c| estimate_tokens(c));
-
-    let row: Option<SnippetRow> = sqlx::query_as(
-        "UPDATE snippets SET
-            name = COALESCE($3, name),
-            display_name = COALESCE($4, display_name),
-            content = COALESCE($5, content),
-            token_estimate = COALESCE($6, token_estimate),
-            updated_at = now()
-         WHERE id = $1 AND tenant_id = $2
-         RETURNING id, tenant_id, name, display_name, content, token_estimate, created_at, updated_at, created_by"
-    )
-    .bind(id)
-    .bind(tenant_id)
-    .bind(&body.name)
-    .bind(&body.display_name)
-    .bind(&body.content)
-    .bind(new_token_estimate)
-    .fetch_optional(&state.db_owner)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("snippets_tenant_id_name_key") => {
-            CasperError::Conflict("snippet name already exists".to_string())
-        }
-        _ => CasperError::Internal(format!("DB error: {e}")),
-    })?;
-
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("snippet {id}")))?;
-    Ok(Json(row_to_response(r)))
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let result = snippet_service::update(&state.db, tenant_id, id, &body).await?;
+    Ok(Json(result))
 }
 
-/// DELETE /api/v1/snippets/:id — Delete snippet.
+/// DELETE /api/v1/snippets/:id -- Delete snippet.
 async fn delete_snippet(
     State(state): State<AppState>,
     guard: ScopeGuard,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, CasperError> {
     guard.require("agents:manage")?;
-
-    let tenant_id = guard.0.tenant_id.0;
-
-    let result = sqlx::query("DELETE FROM snippets WHERE id = $1 AND tenant_id = $2")
-        .bind(id)
-        .bind(tenant_id)
-        .execute(&state.db_owner)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    if result.rows_affected() == 0 {
-        return Err(CasperError::NotFound(format!("snippet {id}")));
-    }
-
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
+    let result = snippet_service::delete(&state.db, tenant_id, id).await?;
+    Ok(Json(result))
 }
 
 // ── Router ────────────────────────────────────────────────────────

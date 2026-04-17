@@ -29,7 +29,7 @@ impl JwtSigner {
         role: &str,
         scopes: Vec<String>,
     ) -> Result<(String, String), CasperError> {
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let jti = Uuid::now_v7().to_string();
         let claims = CasperClaims {
             sub: subject.to_string(),
@@ -51,7 +51,7 @@ impl JwtSigner {
         tenant_id: TenantId,
         subject: &str,
     ) -> Result<(String, String), CasperError> {
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let jti = Uuid::now_v7().to_string();
         let claims = CasperClaims {
             sub: subject.to_string(),

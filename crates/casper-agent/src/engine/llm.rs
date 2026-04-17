@@ -7,6 +7,8 @@
 
 use casper_base::CasperError;
 use casper_proxy::{LlmRequest, LlmResponse};
+#[cfg(test)]
+use casper_proxy::MessageRole;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -79,7 +81,7 @@ impl MockLlmCaller {
     pub fn simple(text: &str) -> Self {
         Self::new(vec![LlmResponse {
             content: text.to_string(),
-            role: "assistant".to_string(),
+            role: MessageRole::Assistant,
             model: "mock-model".to_string(),
             input_tokens: 100,
             output_tokens: 50,
@@ -95,7 +97,7 @@ impl MockLlmCaller {
         Self::new(vec![
             LlmResponse {
                 content: String::new(),
-                role: "assistant".to_string(),
+                role: MessageRole::Assistant,
                 model: "mock-model".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
@@ -111,7 +113,7 @@ impl MockLlmCaller {
             },
             LlmResponse {
                 content: final_text.to_string(),
-                role: "assistant".to_string(),
+                role: MessageRole::Assistant,
                 model: "mock-model".to_string(),
                 input_tokens: 150,
                 output_tokens: 60,

@@ -1,7 +1,7 @@
 use casper_base::CasperError;
 use serde_json::json;
 
-use crate::types::{LlmRequest, LlmResponse};
+use crate::types::{LlmRequest, LlmResponse, MessageRole};
 
 /// Send a request to the Anthropic Messages API and parse the response.
 pub async fn call(
@@ -87,7 +87,7 @@ fn extract_system_and_messages(
     let mut out = Vec::new();
 
     for msg in messages {
-        if msg.role == "system" {
+        if msg.role == MessageRole::System {
             // Anthropic system can be a string or array of content blocks
             system = Some(msg.content.clone());
         } else {
@@ -153,7 +153,7 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
 
     Ok(LlmResponse {
         content,
-        role: "assistant".to_string(),
+        role: MessageRole::Assistant,
         model,
         input_tokens,
         output_tokens,
@@ -196,11 +196,11 @@ mod tests {
     fn extract_system_message() {
         let messages = vec![
             crate::types::Message {
-                role: "system".to_string(),
+                role: MessageRole::System,
                 content: json!("You are a helpful assistant"),
             },
             crate::types::Message {
-                role: "user".to_string(),
+                role: MessageRole::User,
                 content: json!("Hello"),
             },
         ];
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn extract_no_system() {
         let messages = vec![crate::types::Message {
-            role: "user".to_string(),
+            role: MessageRole::User,
             content: json!("Hello"),
         }];
 
@@ -244,7 +244,7 @@ mod tests {
 
         let llm = parse_response(&resp).unwrap();
         assert_eq!(llm.content, "Hello! How can I help?");
-        assert_eq!(llm.role, "assistant");
+        assert_eq!(llm.role, MessageRole::Assistant);
         assert_eq!(llm.input_tokens, 25);
         assert_eq!(llm.output_tokens, 10);
         assert_eq!(llm.cache_read_tokens, Some(5));

@@ -8,7 +8,6 @@ casper-base = { workspace = true }
 casper-db = { workspace = true }
 casper-catalog = { workspace = true }
 casper-proxy = { workspace = true }
-casper-knowledge = { workspace = true }
 casper-mcp = { workspace = true }
 casper-observe = { workspace = true }
 sqlx = { workspace = true }

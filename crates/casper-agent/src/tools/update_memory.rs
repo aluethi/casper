@@ -72,7 +72,8 @@ impl Tool for UpdateMemoryTool {
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
         // Set tenant context for RLS
-        sqlx::query(&format!("SET LOCAL app.tenant_id = '{}'", ctx.tenant_id))
+        sqlx::query("SELECT set_config('app.tenant_id', $1::text, true)")
+            .bind(ctx.tenant_id.to_string())
             .execute(&mut *tx)
             .await
             .map_err(|e| CasperError::Internal(format!("DB error setting tenant: {e}")))?;
