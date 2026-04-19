@@ -5,12 +5,41 @@ use tokio::sync::mpsc;
 
 use crate::types::{LlmRequest, LlmResponse, MessageRole, StreamEvent};
 
+/// Whether to use Azure OpenAI's URL and auth format.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OpenAiVariant {
+    /// Standard OpenAI / compatible: `{base}/v1/chat/completions`, `Authorization: Bearer`
+    Standard,
+    /// Azure OpenAI: base_url IS the full endpoint, `api-key` header
+    Azure,
+}
+
 /// Send a request to an OpenAI-compatible Chat Completions API and parse the response.
 pub async fn call(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
     request: &LlmRequest,
+) -> Result<LlmResponse, CasperError> {
+    call_with_variant(client, base_url, api_key, request, OpenAiVariant::Standard).await
+}
+
+/// Azure OpenAI variant.
+pub async fn call_azure(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    request: &LlmRequest,
+) -> Result<LlmResponse, CasperError> {
+    call_with_variant(client, base_url, api_key, request, OpenAiVariant::Azure).await
+}
+
+async fn call_with_variant(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    request: &LlmRequest,
+    variant: OpenAiVariant,
 ) -> Result<LlmResponse, CasperError> {
     let mut messages = build_messages(&request.messages);
 
@@ -29,7 +58,9 @@ pub async fn call(
     });
 
     if let Some(max_tokens) = request.max_tokens {
-        body["max_tokens"] = json!(max_tokens);
+        let key = if variant == OpenAiVariant::Azure { "max_completion_tokens" } else { "max_tokens" };
+        tracing::debug!(variant = ?variant, key, max_tokens, "setting max tokens param");
+        body[key] = json!(max_tokens);
     }
 
     if let Some(temp) = request.temperature {
@@ -42,11 +73,12 @@ pub async fn call(
         }
     }
 
-    // Merge extra params (skip "system" — already handled above as a message)
+    // Merge extra params (skip keys already handled above)
     if let serde_json::Value::Object(ref extra) = request.extra {
         let body_obj = body.as_object_mut().unwrap();
         for (k, v) in extra {
-            if k == "system" {
+            // "system" is handled as a message; "max_tokens" is handled via the dedicated field
+            if k == "system" || k == "max_tokens" || k == "max_completion_tokens" {
                 continue;
             }
             if !body_obj.contains_key(k) {
@@ -55,18 +87,32 @@ pub async fn call(
         }
     }
 
-    // Try both common URL patterns
-    let base = base_url.trim_end_matches('/');
-    let url = if base.ends_with("/v1") {
-        format!("{base}/chat/completions")
-    } else {
-        format!("{base}/v1/chat/completions")
+    let url = match variant {
+        OpenAiVariant::Azure => {
+            // Azure: base_url is the full endpoint including api-version
+            // e.g. https://myresource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21
+            base_url.to_string()
+        }
+        OpenAiVariant::Standard => {
+            let base = base_url.trim_end_matches('/');
+            if base.ends_with("/v1") {
+                format!("{base}/chat/completions")
+            } else {
+                format!("{base}/v1/chat/completions")
+            }
+        }
     };
 
-    let response = client
+    let mut http_req = client
         .post(&url)
-        .header("authorization", format!("Bearer {api_key}"))
-        .header("content-type", "application/json")
+        .header("content-type", "application/json");
+
+    http_req = match variant {
+        OpenAiVariant::Azure => http_req.header("api-key", api_key),
+        OpenAiVariant::Standard => http_req.header("authorization", format!("Bearer {api_key}")),
+    };
+
+    let response = http_req
         .json(&body)
         .send()
         .await
@@ -96,6 +142,28 @@ pub async fn call_stream(
     request: &LlmRequest,
     tx: mpsc::Sender<StreamEvent>,
 ) -> Result<LlmResponse, CasperError> {
+    call_stream_with_variant(client, base_url, api_key, request, tx, OpenAiVariant::Standard).await
+}
+
+/// Azure OpenAI streaming variant.
+pub async fn call_stream_azure(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    request: &LlmRequest,
+    tx: mpsc::Sender<StreamEvent>,
+) -> Result<LlmResponse, CasperError> {
+    call_stream_with_variant(client, base_url, api_key, request, tx, OpenAiVariant::Azure).await
+}
+
+async fn call_stream_with_variant(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    request: &LlmRequest,
+    tx: mpsc::Sender<StreamEvent>,
+    variant: OpenAiVariant,
+) -> Result<LlmResponse, CasperError> {
     let mut messages = build_messages(&request.messages);
 
     if let Some(system) = request.extra.get("system").and_then(|v| v.as_str()) {
@@ -112,7 +180,8 @@ pub async fn call_stream(
     });
 
     if let Some(max_tokens) = request.max_tokens {
-        body["max_tokens"] = json!(max_tokens);
+        let key = if variant == OpenAiVariant::Azure { "max_completion_tokens" } else { "max_tokens" };
+        body[key] = json!(max_tokens);
     }
     if let Some(temp) = request.temperature {
         body["temperature"] = json!(temp);
@@ -126,24 +195,34 @@ pub async fn call_stream(
     if let serde_json::Value::Object(ref extra) = request.extra {
         let body_obj = body.as_object_mut().unwrap();
         for (k, v) in extra {
-            if k == "system" { continue; }
+            if k == "system" || k == "max_tokens" || k == "max_completion_tokens" { continue; }
             if !body_obj.contains_key(k) {
                 body_obj.insert(k.clone(), v.clone());
             }
         }
     }
 
-    let base = base_url.trim_end_matches('/');
-    let url = if base.ends_with("/v1") {
-        format!("{base}/chat/completions")
-    } else {
-        format!("{base}/v1/chat/completions")
+    let url = match variant {
+        OpenAiVariant::Azure => base_url.to_string(),
+        OpenAiVariant::Standard => {
+            let base = base_url.trim_end_matches('/');
+            if base.ends_with("/v1") { format!("{base}/chat/completions") }
+            else { format!("{base}/v1/chat/completions") }
+        }
     };
 
-    let response = client
+    // Override the client's global timeout — streaming responses can run for minutes
+    let mut http_req = client
         .post(&url)
-        .header("authorization", format!("Bearer {api_key}"))
         .header("content-type", "application/json")
+        .timeout(std::time::Duration::from_secs(600));
+
+    http_req = match variant {
+        OpenAiVariant::Azure => http_req.header("api-key", api_key),
+        OpenAiVariant::Standard => http_req.header("authorization", format!("Bearer {api_key}")),
+    };
+
+    let response = http_req
         .json(&body)
         .send()
         .await

@@ -5,6 +5,9 @@ export interface StreamHandlers {
   onContentDelta?: (delta: string) => void
   onToolCallStart?: (id: string, name: string, input: Record<string, unknown>) => void
   onToolResult?: (id: string, name: string, content: string, isError: boolean) => void
+  onConnectRequired?: (provider: string, displayName: string) => void
+  onMcpOAuthRequired?: (mcpServerUrl: string, authorizationUrl: string) => void
+  onAskUser?: (questionId: string, question: string, options: string[]) => void
   onDone?: (data: { conversation_id: string; input_tokens: number; output_tokens: number }) => void
   onError?: (message: string) => void
 }
@@ -85,6 +88,15 @@ export async function fetchSSE(
             break
           case 'tool_result':
             handlers.onToolResult?.(parsed.id, parsed.name, parsed.content, parsed.is_error)
+            break
+          case 'connect_required':
+            handlers.onConnectRequired?.(parsed.provider, parsed.display_name)
+            break
+          case 'mcp_oauth_required':
+            handlers.onMcpOAuthRequired?.(parsed.mcp_server_url, parsed.authorization_url)
+            break
+          case 'ask_user':
+            handlers.onAskUser?.(parsed.question_id, parsed.question, parsed.options || [])
             break
           case 'done':
             handlers.onDone?.(parsed)

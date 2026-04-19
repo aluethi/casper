@@ -28,7 +28,8 @@ pub async fn dispatch(
 
     match backend.provider.as_str() {
         "anthropic" => crate::anthropic::call(client, base_url, api_key, request).await,
-        "openai" | "azure_openai" | "openai_compatible" => {
+        "azure_openai" => crate::openai::call_azure(client, base_url, api_key, request).await,
+        "openai" | "openai_compatible" => {
             crate::openai::call(client, base_url, api_key, request).await
         }
         "agent" => {
@@ -140,7 +141,8 @@ pub async fn dispatch_stream(
 
     match backend.provider.as_str() {
         "anthropic" => crate::anthropic::call_stream(client, base_url, api_key, request, tx).await,
-        "openai" | "azure_openai" | "openai_compatible" => {
+        "azure_openai" => crate::openai::call_stream_azure(client, base_url, api_key, request, tx).await,
+        "openai" | "openai_compatible" => {
             crate::openai::call_stream(client, base_url, api_key, request, tx).await
         }
         "agent" => {

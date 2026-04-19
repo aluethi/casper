@@ -23,14 +23,48 @@ use uuid::Uuid;
 
 // ── Tool trait ────────────────────────────────────────────────────
 
+/// Trait for resolving OAuth tokens at runtime. Implemented by the server layer
+/// which has access to the vault and connection service.
+#[async_trait]
+pub trait TokenResolver: Send + Sync {
+    /// Resolve a user's OAuth token for a manually-configured provider.
+    async fn resolve_user_oauth(
+        &self,
+        tenant_id: Uuid,
+        user_subject: &str,
+        provider: &str,
+    ) -> Result<String, CasperError>;
+
+    /// Resolve a user's MCP OAuth 2.1 token (auto-discovered).
+    async fn resolve_mcp_oauth(
+        &self,
+        tenant_id: Uuid,
+        user_subject: &str,
+        mcp_server_url: &str,
+    ) -> Result<String, CasperError>;
+
+    /// Start an MCP OAuth 2.1 flow. Returns the authorization URL.
+    async fn start_mcp_oauth_flow(
+        &self,
+        tenant_id: Uuid,
+        user_subject: &str,
+        mcp_server_url: &str,
+    ) -> Result<String, CasperError>;
+}
+
 /// Context passed to every tool invocation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolContext {
     pub tenant_id: Uuid,
     pub agent_name: String,
     pub conversation_id: Uuid,
     pub correlation_id: Uuid,
     pub db: PgPool,
+    /// The user who triggered this conversation (e.g. "user:jane@acme.com").
+    /// Required for MCP servers with `user_oauth` or `mcp_oauth` auth.
+    pub invoking_user: Option<String>,
+    /// Token resolver for OAuth flows. Provided by the server layer.
+    pub token_resolver: Option<Arc<dyn TokenResolver>>,
 }
 
 /// The result returned by a tool execution.
@@ -239,10 +273,33 @@ pub async fn build_dispatcher(
                     continue;
                 }
             };
-            let api_key = server_cfg
-                .get("api_key")
+            // Parse auth config: { type: "bearer"|"user_oauth"|"none", ... }
+            let auth_cfg = server_cfg.get("auth");
+            let auth_type = auth_cfg
+                .and_then(|a| a.get("type"))
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .unwrap_or("bearer"); // default to bearer for backward compat
+
+            let (api_key, mcp_auth) = match auth_type {
+                "mcp_oauth" => (None, mcp::McpAuth::McpOAuth),
+                "user_oauth" => {
+                    let provider = auth_cfg
+                        .and_then(|a| a.get("provider"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(server_name)
+                        .to_string();
+                    (None, mcp::McpAuth::UserOAuth { provider })
+                }
+                "none" => (None, mcp::McpAuth::None),
+                _ => {
+                    // Bearer: read api_key from config (backward compat) or auth.token_ref
+                    let key = server_cfg
+                        .get("api_key")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    (key, mcp::McpAuth::Bearer)
+                }
+            };
 
             let client = Arc::new(casper_mcp::McpClient::new(
                 url,
@@ -250,7 +307,7 @@ pub async fn build_dispatcher(
                 http_client.clone(),
             ));
 
-            let tools = mcp::discover_and_wrap(server_name, client).await;
+            let tools = mcp::discover_and_wrap(server_name, client, mcp_auth).await;
             for tool in tools {
                 dispatcher.register(Arc::new(tool));
             }
@@ -281,6 +338,8 @@ pub(crate) mod tests_common {
             agent_name: "test-agent".to_string(),
             conversation_id: Uuid::nil(),
             correlation_id: Uuid::nil(),
+            invoking_user: None,
+            token_resolver: None,
             db: sqlx::postgres::PgPoolOptions::new()
                 .max_connections(1)
                 .connect_lazy("postgres://localhost/casper_test_nonexistent")

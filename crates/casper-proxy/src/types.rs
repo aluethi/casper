@@ -107,6 +107,25 @@ pub enum StreamEvent {
         cache_read_tokens: Option<i32>,
         cache_write_tokens: Option<i32>,
     },
+    /// An MCP tool requires a user OAuth connection that doesn't exist yet.
+    /// The UI should show a connect popup, then respond once connected.
+    ConnectRequired {
+        provider: String,
+        display_name: String,
+    },
+    /// MCP server requires OAuth 2.1 authorization. The UI should open
+    /// the authorization URL in a popup window.
+    McpOAuthRequired {
+        mcp_server_url: String,
+        authorization_url: String,
+    },
+    /// Agent is asking the user a question. The UI should show a popup
+    /// and POST the answer back to the respond endpoint.
+    AskUser {
+        question_id: String,
+        question: String,
+        options: Vec<String>,
+    },
     /// Unrecoverable error.
     Error { message: String },
 }

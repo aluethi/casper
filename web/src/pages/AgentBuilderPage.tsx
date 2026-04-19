@@ -8,6 +8,149 @@ import ToolsEditor, { type McpServer } from './components/ToolsEditor'
 import { ChatPanel } from '../components/chat'
 import type { ChatMessage, ToolCallBlock } from '../components/chat'
 
+// ── Ask-user popup ──────────────────────────────────────────────
+
+function AskUserPopup({ question, options, onSubmit }: {
+  question: string
+  options: string[]
+  onSubmit: (answer: string) => void
+}) {
+  const [freeText, setFreeText] = useState('')
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl ring-1 ring-slate-900/10 max-w-lg w-full overflow-hidden">
+        <div className="bg-blue-50 border-b border-blue-100 px-6 py-3 flex items-center gap-2">
+          <svg className="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="text-sm font-semibold text-blue-900">Agent needs your input</span>
+        </div>
+
+        <div className="p-6">
+          <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap mb-4">{question}</p>
+
+          {options.length > 0 ? (
+            <div className="space-y-2">
+              {options.map((opt, i) => (
+                <button key={i} onClick={() => onSubmit(opt)}
+                  className="w-full text-left rounded-xl ring-1 ring-slate-200 hover:ring-blue-300 hover:bg-blue-50 px-4 py-2.5 text-sm font-medium text-slate-800 transition-all">
+                  {opt}
+                </button>
+              ))}
+              <div className="pt-2 border-t border-slate-100 mt-3">
+                <p className="text-xs text-slate-400 mb-1.5">Or type a custom answer:</p>
+                <div className="flex gap-2">
+                  <input type="text" value={freeText} onChange={e => setFreeText(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && freeText.trim()) onSubmit(freeText.trim()) }}
+                    placeholder="Type your answer..."
+                    className="flex-1 rounded-lg ring-1 ring-slate-300 px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                    autoFocus />
+                  <button onClick={() => { if (freeText.trim()) onSubmit(freeText.trim()) }}
+                    disabled={!freeText.trim()}
+                    className="rounded-lg bg-blue-600 text-white px-4 py-1.5 text-sm font-semibold hover:bg-blue-500 disabled:opacity-40 transition-colors">
+                    Send
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <input type="text" value={freeText} onChange={e => setFreeText(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && freeText.trim()) onSubmit(freeText.trim()) }}
+                placeholder="Type your answer..."
+                className="flex-1 rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                autoFocus />
+              <button onClick={() => { if (freeText.trim()) onSubmit(freeText.trim()) }}
+                disabled={!freeText.trim()}
+                className="rounded-lg bg-blue-600 text-white px-5 py-2 text-sm font-semibold hover:bg-blue-500 disabled:opacity-40 transition-colors">
+                Send
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Connect-required popup ──────────────────────────────────────
+
+function ConnectProviderPopup({ provider, displayName, onComplete }: {
+  provider: string
+  displayName: string
+  onComplete: (result: string) => void
+}) {
+  const [status, setStatus] = useState<'idle' | 'connecting' | 'done'>('idle')
+
+  const startConnect = async () => {
+    setStatus('connecting')
+    try {
+      const res = await api.post(`/api/v1/connections/${provider}/start`)
+      const authUrl = res.data.redirect_url
+
+      // Open OAuth flow in a popup window
+      const popup = window.open(authUrl, `connect_${provider}`, 'width=600,height=700,scrollbars=yes')
+
+      // Poll until the popup closes (user completed or cancelled the flow)
+      const poll = setInterval(() => {
+        if (!popup || popup.closed) {
+          clearInterval(poll)
+          setStatus('done')
+          onComplete('connected')
+        }
+      }, 500)
+    } catch (e: any) {
+      setStatus('idle')
+      onComplete(`error: ${e.response?.data?.message ?? e.message}`)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl ring-1 ring-slate-900/10 max-w-md w-full overflow-hidden">
+        <div className="bg-amber-50 border-b border-amber-100 px-6 py-3 flex items-center gap-2">
+          <svg className="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+          </svg>
+          <span className="text-sm font-semibold text-amber-900">Connection required</span>
+        </div>
+
+        <div className="p-6 text-center">
+          {status === 'idle' && (
+            <>
+              <p className="text-sm text-slate-700 mb-4">
+                This action requires access to your <strong>{displayName}</strong> account.
+                Click below to sign in and grant access.
+              </p>
+              <button onClick={startConnect}
+                className="bg-blue-600 text-white px-6 py-2.5 rounded-full text-sm font-semibold hover:bg-blue-500 transition-colors">
+                Connect {displayName}
+              </button>
+              <button onClick={() => onComplete('cancelled')}
+                className="block mx-auto mt-3 text-xs text-slate-400 hover:text-slate-600 transition-colors">
+                Skip
+              </button>
+            </>
+          )}
+          {status === 'connecting' && (
+            <div className="py-4">
+              <div className="animate-spin w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full mx-auto mb-3" />
+              <p className="text-sm text-slate-500">Complete sign-in in the popup window...</p>
+              <p className="text-xs text-slate-400 mt-1">This dialog will close automatically when done.</p>
+            </div>
+          )}
+          {status === 'done' && (
+            <p className="text-sm text-green-700 py-4">Connected. Resuming...</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main component ──────────────────────────────────────────────
+
 interface TextBlock { type: 'text'; label: string; content: string }
 interface KnowledgeBlock { type: 'knowledge'; label: string; budget_tokens: number }
 interface DatasourceBlock { type: 'datasource'; label: string; source: Record<string, unknown>; budget_tokens: number; on_missing: string }
@@ -43,6 +186,14 @@ export default function AgentBuilderPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sending, setSending] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
+
+  // Ask-user popup
+  const [askPopup, setAskPopup] = useState<{ question: string; options: string[] } | null>(null)
+  const askResolveRef = useRef<((answer: string) => void) | null>(null)
+
+  // Connect-required popup
+  const [connectPopup, setConnectPopup] = useState<{ provider: string; displayName: string } | null>(null)
+  const connectResolveRef = useRef<((result: string) => void) | null>(null)
 
   // YAML
   const [yaml, setYaml] = useState('')
@@ -191,6 +342,56 @@ export default function AgentBuilderPage() {
           const tc = streamRef.current.toolCalls.find(t => t.id === id)
           if (tc) { tc.result = content; tc.is_error = isError }
           flush()
+        },
+        async onMcpOAuthRequired(_mcpServerUrl, authorizationUrl) {
+          // Open the OAuth authorization URL directly in a popup
+          const result = await new Promise<string>((resolve) => {
+            const popup = window.open(authorizationUrl, 'mcp_oauth', 'width=600,height=700,scrollbars=yes')
+            const poll = setInterval(() => {
+              if (!popup || popup.closed) {
+                clearInterval(poll)
+                resolve('connected')
+              }
+            }, 500)
+          })
+          if (conversationId) {
+            await api.post('/api/v1/agents/respond', {
+              conversation_id: conversationId,
+              answer: result,
+            }).catch(() => {})
+          }
+        },
+        async onConnectRequired(provider, displayName) {
+          // Show the connect popup and wait for completion
+          const result = await new Promise<string>((resolve) => {
+            connectResolveRef.current = resolve
+            setConnectPopup({ provider, displayName })
+          })
+          setConnectPopup(null)
+          connectResolveRef.current = null
+          // Notify the engine that the user connected (or cancelled)
+          if (conversationId) {
+            await api.post('/api/v1/agents/respond', {
+              conversation_id: conversationId,
+              answer: result,
+            }).catch(() => {})
+          }
+        },
+        async onAskUser(_questionId, question, options) {
+          // Show the popup and wait for the user's answer
+          const answer = await new Promise<string>((resolve) => {
+            askResolveRef.current = resolve
+            setAskPopup({ question, options })
+          })
+          setAskPopup(null)
+          askResolveRef.current = null
+          // POST the answer back to the engine
+          if (conversationId) {
+            await api.post('/api/v1/agents/respond', {
+              conversation_id: conversationId,
+              answer,
+            }).catch(() => {})
+          }
         },
         onDone(data) {
           if (data.conversation_id) setConversationId(data.conversation_id)
@@ -352,6 +553,20 @@ export default function AgentBuilderPage() {
             onStop={stopStream}
             emptyStateText="Send a message to start chatting with the agent"
           />
+
+          {/* Ask-user popup */}
+          {askPopup && <AskUserPopup
+            question={askPopup.question}
+            options={askPopup.options}
+            onSubmit={(answer) => askResolveRef.current?.(answer)}
+          />}
+
+          {/* Connect-required popup */}
+          {connectPopup && <ConnectProviderPopup
+            provider={connectPopup.provider}
+            displayName={connectPopup.displayName}
+            onComplete={(result) => connectResolveRef.current?.(result)}
+          />}
         </div>
       )}
 

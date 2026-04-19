@@ -130,14 +130,23 @@ export default function BackendsPage() {
             <select value={form.provider} onChange={e => setForm({...form, provider: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow">
               <option value="anthropic">Anthropic</option>
               <option value="openai_compatible">OpenAI-compatible</option>
+              <option value="azure_openai">Azure OpenAI</option>
               <option value="agent">Agent (self-hosted GPU)</option>
             </select>
           </div>
           {form.provider !== 'agent' && (
-            <div className="grid grid-cols-3 gap-3">
-              <input placeholder="Base URL (e.g. https://api.anthropic.com)" value={form.base_url} onChange={e => setForm({...form, base_url: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
-              <input type="password" placeholder="API Key" value={form.api_key_enc} onChange={e => setForm({...form, api_key_enc: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
-              <input placeholder="Region (optional)" value={form.region} onChange={e => setForm({...form, region: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+            <div className="space-y-3">
+              {form.provider === 'azure_openai' && (
+                <p className="text-xs text-slate-500">
+                  Azure OpenAI requires the full deployment endpoint URL including api-version, e.g.:<br/>
+                  <code className="bg-slate-100 px-1 rounded text-[11px]">https://myresource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21</code>
+                </p>
+              )}
+              <div className="grid grid-cols-3 gap-3">
+                <input placeholder={form.provider === 'azure_openai' ? 'Full endpoint URL (see above)' : 'Base URL (e.g. https://api.anthropic.com)'} value={form.base_url} onChange={e => setForm({...form, base_url: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+                <input type="password" placeholder={form.provider === 'azure_openai' ? 'Azure API Key' : 'API Key'} value={form.api_key_enc} onChange={e => setForm({...form, api_key_enc: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+                <input placeholder="Region (optional)" value={form.region} onChange={e => setForm({...form, region: e.target.value})} className="rounded-lg ring-1 ring-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none transition-shadow" />
+              </div>
             </div>
           )}
           {form.provider === 'agent' && (

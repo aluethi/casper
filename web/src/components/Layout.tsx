@@ -23,6 +23,7 @@ const navSections = [
   {
     title: 'Settings',
     links: [
+      { to: '/settings/connections', label: 'Connections' },
       { to: '/admin/users', label: 'Users' },
       { to: '/admin/secrets', label: 'Secrets' },
       { to: '/audit', label: 'Audit' },

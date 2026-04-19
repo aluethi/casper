@@ -267,6 +267,38 @@ pub fn generate_tool_documentation(
                 Call them by their full qualified name with the parameters defined in their schema.\n\n"
             ));
 
+            // Describe the auth mode so the LLM knows what to expect
+            let auth_type = server.get("auth")
+                .and_then(|a| a.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(if server.get("api_key").is_some() { "bearer" } else { "none" });
+
+            match auth_type {
+                "user_oauth" => {
+                    let provider = server.get("auth")
+                        .and_then(|a| a.get("provider"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("the provider");
+                    s.push_str(&format!(
+                        "**Authentication:** User OAuth ({provider}). These tools act as the current user. \
+                        If the user has not connected their {provider} account, the platform will prompt them \
+                        to sign in. You do not need to handle authentication — just call the tool and the \
+                        platform handles the rest. If a tool returns a connection error, inform the user \
+                        they need to connect their account.\n\n"
+                    ));
+                }
+                "mcp_oauth" => {
+                    s.push_str(
+                        "**Authentication:** MCP OAuth 2.1 (auto-discovered). These tools act as the \
+                        current user. When called for the first time, the platform will automatically \
+                        prompt the user to authorize access via their browser. You do not need to handle \
+                        authentication — just call the tool. If it fails with an auth error, tell the \
+                        user the platform will prompt them to sign in.\n\n"
+                    );
+                }
+                _ => {} // bearer and none need no special mention
+            }
+
             if let Some(tools) = mcp_summaries.get(server_name) {
                 s.push_str("Available tools:\n");
                 for (qualified_name, description) in tools {
