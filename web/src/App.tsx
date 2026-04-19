@@ -20,6 +20,7 @@ import BackendsPage from './pages/admin/BackendsPage'
 import QuotasPage from './pages/admin/QuotasPage'
 import TenantsPage from './pages/admin/TenantsPage'
 import PlaygroundPage from './pages/PlaygroundPage'
+import ConnectionsPage from './pages/ConnectionsPage'
 
 export default function App() {
   return (
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/conversations" element={<ConversationListPage />} />
+        <Route path="/settings/connections" element={<ConnectionsPage />} />
         <Route path="/usage" element={<UsagePage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="/admin/users" element={<UsersPage />} />

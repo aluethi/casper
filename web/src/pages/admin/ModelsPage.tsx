@@ -10,8 +10,17 @@ interface Model {
   published: boolean; is_active: boolean; created_at: string;
 }
 
+interface Backend {
+  id: string; name: string; provider: string; region: string | null; is_active: boolean;
+}
+
+interface BackendAssignment {
+  backend_id: string; model_id: string; priority: number;
+}
+
 export default function ModelsPage() {
   const [models, setModels] = useState<Model[]>([])
+  const [allBackends, setAllBackends] = useState<Backend[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -25,9 +34,18 @@ export default function ModelsPage() {
   })
   const [editForm, setEditForm] = useState({ display_name: '', context_window: 0, max_output_tokens: 0, cost_per_1k_input: 0, cost_per_1k_output: 0 })
 
+  // Backend assignment panel
+  const [backendsForModel, setBackendsForModel] = useState<string | null>(null)
+  const [assignments, setAssignments] = useState<BackendAssignment[]>([])
+  const [assignForm, setAssignForm] = useState({ backend_id: '', priority: 100 })
+
   const load = () => {
-    api.get('/api/v1/models').then(r => {
-      setModels(r.data.data || r.data)
+    Promise.all([
+      api.get('/api/v1/models'),
+      api.get('/api/v1/backends'),
+    ]).then(([mRes, bRes]) => {
+      setModels(mRes.data.data || mRes.data)
+      setAllBackends((bRes.data.data || bRes.data).filter((b: Backend) => b.is_active))
       setLoading(false)
     }).catch(e => { setError(e.message); setLoading(false) })
   }
@@ -68,7 +86,43 @@ export default function ModelsPage() {
     }).catch(e => setError(e.response?.data?.message || e.message))
   }
 
+  // Backend assignment
+  const loadBackends = (modelId: string) => {
+    if (backendsForModel === modelId) { setBackendsForModel(null); return }
+    setBackendsForModel(modelId)
+    api.get(`/api/v1/models/${modelId}/backends`).then(r => {
+      setAssignments(r.data.data || r.data || [])
+    }).catch(() => setAssignments([]))
+  }
+
+  const assignBackend = (modelId: string) => {
+    if (!assignForm.backend_id) return
+    api.post(`/api/v1/models/${modelId}/backends`, {
+      backend_id: assignForm.backend_id,
+      priority: assignForm.priority,
+    }).then(() => {
+      setAssignForm({ backend_id: '', priority: 100 })
+      loadBackends(modelId)
+      // Re-expand to refresh
+      setBackendsForModel(null)
+      setTimeout(() => loadBackends(modelId), 100)
+    }).catch(e => setError(e.response?.data?.message || e.message))
+  }
+
+  const removeAssignment = (modelId: string, backendId: string) => {
+    api.delete(`/api/v1/models/${modelId}/backends/${backendId}`).then(() => {
+      setAssignments(assignments.filter(a => a.backend_id !== backendId))
+    }).catch(e => setError(e.response?.data?.message || e.message))
+  }
+
+  const backendName = (id: string) => allBackends.find(b => b.id === id)?.name ?? id.slice(0, 8)
+  const backendProvider = (id: string) => allBackends.find(b => b.id === id)?.provider ?? ''
+
   if (loading) return <p className="text-slate-500">Loading models...</p>
+
+  // Filter out already-assigned backends from the dropdown
+  const assignedIds = new Set(assignments.map(a => a.backend_id))
+  const availableBackends = allBackends.filter(b => !assignedIds.has(b.id))
 
   return (
     <div>
@@ -147,37 +201,113 @@ export default function ModelsPage() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {models.map(m => (
-              <tr key={m.id} className={`hover:bg-slate-50 ${!m.is_active ? 'opacity-50' : ''}`}>
-                <td className="px-4 py-3"><div className="font-medium text-sm">{m.display_name}</div><div className="text-xs text-slate-500">{m.name}</div></td>
-                <td className="px-4 py-3 text-sm">{m.provider}</td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap gap-1">
-                    {m.cap_chat && <span className="rounded-full px-2 py-0.5 bg-blue-50 text-blue-700 text-xs font-medium ring-1 ring-blue-600/20">Chat</span>}
-                    {m.cap_thinking && <span className="rounded-full px-2 py-0.5 bg-purple-50 text-purple-700 text-xs font-medium ring-1 ring-purple-600/20">Think</span>}
-                    {m.cap_vision && <span className="rounded-full px-2 py-0.5 bg-green-50 text-green-700 text-xs font-medium ring-1 ring-green-600/20">Vision</span>}
-                    {m.cap_tool_use && <span className="rounded-full px-2 py-0.5 bg-orange-50 text-orange-700 text-xs font-medium ring-1 ring-orange-600/20">Tools</span>}
-                    {m.cap_json_output && <span className="rounded-full px-2 py-0.5 bg-cyan-50 text-cyan-700 text-xs font-medium ring-1 ring-cyan-600/20">JSON</span>}
-                    {m.cap_embedding && <span className="rounded-full px-2 py-0.5 bg-pink-50 text-pink-700 text-xs font-medium ring-1 ring-pink-600/20">Embed</span>}
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-sm text-slate-600">{m.context_window?.toLocaleString() ?? '-'}</td>
-                <td className="px-4 py-3 text-xs text-slate-600">{m.cost_per_1k_input != null ? `$${m.cost_per_1k_input} / $${m.cost_per_1k_output}` : '-'}</td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-1">
-                    <button onClick={() => togglePublish(m)} className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${m.published ? 'bg-green-50 text-green-700 ring-1 ring-green-600/20' : 'bg-slate-50 text-slate-500 ring-1 ring-slate-600/20'}`}>
-                      {m.published ? 'Published' : 'Draft'}
-                    </button>
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-2">
-                    <button onClick={() => startEdit(m)} className="text-blue-600 hover:text-blue-500 text-sm font-medium transition-colors">Edit</button>
-                    <button onClick={() => toggleActive(m)} className={`text-sm font-medium transition-colors ${m.is_active ? 'text-amber-600 hover:text-amber-500' : 'text-green-600 hover:text-green-500'}`}>
-                      {m.is_active ? 'Deactivate' : 'Activate'}
-                    </button>
-                  </div>
-                </td>
-              </tr>
+              <>
+                <tr key={m.id} className={`hover:bg-slate-50 ${!m.is_active ? 'opacity-50' : ''}`}>
+                  <td className="px-4 py-3"><div className="font-medium text-sm">{m.display_name}</div><div className="text-xs text-slate-500">{m.name}</div></td>
+                  <td className="px-4 py-3 text-sm">{m.provider}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap gap-1">
+                      {m.cap_chat && <span className="rounded-full px-2 py-0.5 bg-blue-50 text-blue-700 text-xs font-medium ring-1 ring-blue-600/20">Chat</span>}
+                      {m.cap_thinking && <span className="rounded-full px-2 py-0.5 bg-purple-50 text-purple-700 text-xs font-medium ring-1 ring-purple-600/20">Think</span>}
+                      {m.cap_vision && <span className="rounded-full px-2 py-0.5 bg-green-50 text-green-700 text-xs font-medium ring-1 ring-green-600/20">Vision</span>}
+                      {m.cap_tool_use && <span className="rounded-full px-2 py-0.5 bg-orange-50 text-orange-700 text-xs font-medium ring-1 ring-orange-600/20">Tools</span>}
+                      {m.cap_json_output && <span className="rounded-full px-2 py-0.5 bg-cyan-50 text-cyan-700 text-xs font-medium ring-1 ring-cyan-600/20">JSON</span>}
+                      {m.cap_embedding && <span className="rounded-full px-2 py-0.5 bg-pink-50 text-pink-700 text-xs font-medium ring-1 ring-pink-600/20">Embed</span>}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-600">{m.context_window?.toLocaleString() ?? '-'}</td>
+                  <td className="px-4 py-3 text-xs text-slate-600">{m.cost_per_1k_input != null ? `$${m.cost_per_1k_input} / $${m.cost_per_1k_output}` : '-'}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1">
+                      <button onClick={() => togglePublish(m)} className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${m.published ? 'bg-green-50 text-green-700 ring-1 ring-green-600/20' : 'bg-slate-50 text-slate-500 ring-1 ring-slate-600/20'}`}>
+                        {m.published ? 'Published' : 'Draft'}
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2">
+                      <button onClick={() => startEdit(m)} className="text-blue-600 hover:text-blue-500 text-sm font-medium transition-colors">Edit</button>
+                      <button onClick={() => loadBackends(m.id)} className={`text-sm font-medium transition-colors ${backendsForModel === m.id ? 'text-emerald-700' : 'text-emerald-600 hover:text-emerald-500'}`}>
+                        Backends
+                      </button>
+                      <button onClick={() => toggleActive(m)} className={`text-sm font-medium transition-colors ${m.is_active ? 'text-amber-600 hover:text-amber-500' : 'text-green-600 hover:text-green-500'}`}>
+                        {m.is_active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+
+                {/* Backend assignments panel */}
+                {backendsForModel === m.id && (
+                  <tr key={`${m.id}-backends`}>
+                    <td colSpan={7} className="px-4 py-4 bg-emerald-50/30">
+                      <div className="rounded-xl ring-1 ring-emerald-200 bg-white p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-sm font-semibold text-emerald-900">Backends for {m.display_name}</h4>
+                          <div className="flex gap-2 items-center">
+                            <select value={assignForm.backend_id}
+                              onChange={e => setAssignForm({ ...assignForm, backend_id: e.target.value })}
+                              className="rounded-lg ring-1 ring-slate-300 px-3 py-1.5 text-sm w-56 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                              <option value="">Select backend...</option>
+                              {availableBackends.map(b => (
+                                <option key={b.id} value={b.id}>{b.name} ({b.provider})</option>
+                              ))}
+                            </select>
+                            <input type="number" value={assignForm.priority}
+                              onChange={e => setAssignForm({ ...assignForm, priority: +e.target.value })}
+                              className="rounded-lg ring-1 ring-slate-300 px-2 py-1.5 text-sm w-20 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                              placeholder="Priority" />
+                            <button onClick={() => assignBackend(m.id)}
+                              disabled={!assignForm.backend_id}
+                              className="bg-emerald-600 text-white px-3 py-1.5 rounded-full text-xs font-semibold hover:bg-emerald-500 disabled:opacity-40 transition-colors">
+                              + Assign
+                            </button>
+                          </div>
+                        </div>
+
+                        {assignments.length === 0 ? (
+                          <p className="text-sm text-slate-400">No backends assigned. Deployments using this model won't be able to route requests.</p>
+                        ) : (
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-xs text-slate-500 uppercase tracking-wide">
+                                <th className="text-left py-1.5">Backend</th>
+                                <th className="text-left py-1.5">Provider</th>
+                                <th className="text-left py-1.5">Priority</th>
+                                <th className="text-right py-1.5"></th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {assignments
+                                .sort((a, b) => a.priority - b.priority)
+                                .map(a => (
+                                <tr key={a.backend_id}>
+                                  <td className="py-1.5 font-medium text-slate-900">{backendName(a.backend_id)}</td>
+                                  <td className="py-1.5 text-slate-500">{backendProvider(a.backend_id)}</td>
+                                  <td className="py-1.5 text-slate-600">{a.priority}</td>
+                                  <td className="py-1.5 text-right">
+                                    <button onClick={() => removeAssignment(m.id, a.backend_id)}
+                                      className="text-red-600 hover:text-red-500 text-xs font-medium transition-colors">
+                                      Remove
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+
+                        <div className="mt-3 pt-3 border-t border-slate-100">
+                          <p className="text-xs text-slate-400">
+                            Requests are routed to backends in priority order (lower = tried first).
+                            If a backend fails and fallback is enabled on the deployment, the next backend is tried.
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
             ))}
           </tbody>
         </table>

@@ -209,6 +209,8 @@ impl AgentEngine {
             conversation_id,
             correlation_id,
             db: self.db.clone(),
+            invoking_user: Some(author.to_string()),
+            token_resolver: None,
         };
 
         let mut usage = AgentUsage::default();
@@ -488,6 +490,7 @@ impl AgentEngine {
         author: &str,
         _metadata: &serde_json::Value,
         tx: mpsc::Sender<StreamEvent>,
+        mut ask_rx: mpsc::Receiver<String>,
     ) -> Result<AgentResponse, CasperError> {
         let correlation_id = Uuid::now_v7();
         let start = Instant::now();
@@ -546,6 +549,8 @@ impl AgentEngine {
         let tool_ctx = ToolContext {
             tenant_id, agent_name: agent_name.to_string(),
             conversation_id, correlation_id, db: self.db.clone(),
+            invoking_user: Some(author.to_string()),
+            token_resolver: None,
         };
 
         let mut usage = AgentUsage::default();
@@ -615,7 +620,7 @@ impl AgentEngine {
                     let mut tool_result = active_dispatcher
                         .dispatch(tool_name, tool_input.clone(), &tool_ctx).await;
 
-                    // Handle delegation
+                    // Handle delegation sentinel
                     if let Ok(ref result) = tool_result {
                         if result.content.get("__delegate__").and_then(|v| v.as_bool()) == Some(true) {
                             let target = result.content["agent"].as_str().unwrap_or("");
@@ -628,6 +633,144 @@ impl AgentEngine {
                                 target, child_msg, tenant_id, agent_name,
                                 correlation_id, timeout_secs, max_depth,
                             ).await);
+                        }
+                    }
+
+                    // Handle ask_user sentinel — pause and wait for user input
+                    if let Ok(ref result) = tool_result {
+                        if result.content.get("__ask_user__").and_then(|v| v.as_bool()) == Some(true) {
+                            let question = result.content["question"].as_str().unwrap_or("").to_string();
+                            let options: Vec<String> = result.content["options"]
+                                .as_array()
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                .unwrap_or_default();
+
+                            let question_id = Uuid::now_v7().to_string();
+
+                            // Send the question to the client
+                            let _ = tx.send(StreamEvent::AskUser {
+                                question_id: question_id.clone(),
+                                question: question.clone(),
+                                options: options.clone(),
+                            }).await;
+
+                            tracing::info!(
+                                agent = %agent_name,
+                                question_id = %question_id,
+                                question = %question,
+                                "waiting for user input"
+                            );
+
+                            // Wait for the user's answer (5-minute timeout)
+                            let answer = tokio::time::timeout(
+                                std::time::Duration::from_secs(300),
+                                ask_rx.recv(),
+                            ).await;
+
+                            let answer_text = match answer {
+                                Ok(Some(text)) => text,
+                                Ok(None) => "User did not respond (channel closed).".to_string(),
+                                Err(_) => "User did not respond within 5 minutes.".to_string(),
+                            };
+
+                            tracing::info!(
+                                agent = %agent_name,
+                                question_id = %question_id,
+                                answer_len = answer_text.len(),
+                                "received user input"
+                            );
+
+                            tool_result = Ok(crate::tools::ToolResult::ok(
+                                serde_json::Value::String(answer_text),
+                            ));
+                        }
+                    }
+
+                    // Handle missing user_oauth connection — prompt to connect
+                    if let Err(ref e) = tool_result {
+                        let err_msg = e.to_string();
+                        if err_msg.contains("has not connected") {
+                            // Extract the provider name from the error
+                            let provider = err_msg
+                                .split('\'').nth(3)  // "...has not connected '<provider>'..."
+                                .unwrap_or("unknown")
+                                .to_string();
+
+                            let _ = tx.send(StreamEvent::ConnectRequired {
+                                provider: provider.clone(),
+                                display_name: provider.clone(),
+                            }).await;
+
+                            tracing::info!(
+                                agent = %agent_name,
+                                provider = %provider,
+                                "waiting for user to connect OAuth provider"
+                            );
+
+                            // Wait for the user to complete the OAuth flow
+                            let connected = tokio::time::timeout(
+                                std::time::Duration::from_secs(300),
+                                ask_rx.recv(),
+                            ).await;
+
+                            match connected {
+                                Ok(Some(_)) => {
+                                    // Retry the tool call now that the user is connected
+                                    tracing::info!(agent = %agent_name, provider = %provider, "user connected, retrying tool");
+                                    tool_result = active_dispatcher
+                                        .dispatch(tool_name, tool_input.clone(), &tool_ctx).await;
+                                }
+                                _ => {
+                                    tool_result = Ok(crate::tools::ToolResult::error(format!(
+                                        "User did not connect {provider} within the timeout."
+                                    )));
+                                }
+                            }
+                        }
+                    }
+
+                    // Handle MCP OAuth 2.1 required sentinel
+                    if let Ok(ref result) = tool_result {
+                        if result.content.get("__mcp_oauth_required__").and_then(|v| v.as_bool()) == Some(true) {
+                            let mcp_url = result.content["mcp_server_url"].as_str().unwrap_or("").to_string();
+
+                            // Try to start the OAuth flow via the token resolver
+                            let auth_url = if let (Some(user), Some(resolver)) =
+                                (tool_ctx.invoking_user.as_deref(), tool_ctx.token_resolver.as_ref())
+                            {
+                                resolver.start_mcp_oauth_flow(tenant_id, user, &mcp_url).await.ok()
+                            } else {
+                                None
+                            };
+
+                            if let Some(auth_url) = auth_url {
+                                let _ = tx.send(StreamEvent::McpOAuthRequired {
+                                    mcp_server_url: mcp_url.clone(),
+                                    authorization_url: auth_url,
+                                }).await;
+
+                                // Wait for user to complete OAuth
+                                let connected = tokio::time::timeout(
+                                    std::time::Duration::from_secs(300),
+                                    ask_rx.recv(),
+                                ).await;
+
+                                match connected {
+                                    Ok(Some(_)) => {
+                                        tool_result = active_dispatcher
+                                            .dispatch(tool_name, tool_input.clone(), &tool_ctx).await;
+                                    }
+                                    _ => {
+                                        tool_result = Ok(crate::tools::ToolResult::error(
+                                            "User did not complete MCP OAuth within the timeout."
+                                        ));
+                                    }
+                                }
+                            } else {
+                                tool_result = Ok(crate::tools::ToolResult::error(format!(
+                                    "MCP server at {mcp_url} requires OAuth but the flow could not be started."
+                                )));
+                            }
                         }
                     }
 

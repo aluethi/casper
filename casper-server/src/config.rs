@@ -14,6 +14,8 @@ pub struct ListenConfig {
     pub port: u16,
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// Public URL for OAuth callbacks (e.g. "https://casper.ventoo.ai").
+    pub public_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -60,7 +62,25 @@ fn default_analytics_pool_size() -> u32 {
 impl ServerConfig {
     pub fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let contents = std::fs::read_to_string(path)?;
-        let config: Self = serde_yaml::from_str(&contents)?;
+        let mut config: Self = serde_yaml::from_str(&contents)?;
+
+        // Allow environment variable overrides for container deployments.
+        if let Ok(url) = std::env::var("DATABASE_URL") {
+            config.database.url = url;
+        }
+        if let Ok(url) = std::env::var("DATABASE_OWNER_URL") {
+            config.database.owner_url = Some(url);
+        }
+        if let Ok(url) = std::env::var("CASPER_PUBLIC_URL") {
+            config.listen.public_url = Some(url);
+        }
+        if let Ok(v) = std::env::var("CASPER_DEV_AUTH") {
+            config.auth.dev_auth = v == "true" || v == "1";
+        }
+        if let Ok(email) = std::env::var("CASPER_ADMIN_EMAIL") {
+            config.auth.admin_email = Some(email);
+        }
+
         Ok(config)
     }
 }

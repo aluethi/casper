@@ -15,8 +15,10 @@ COPY crates/casper-proxy/Cargo.toml crates/casper-proxy/Cargo.toml
 COPY crates/casper-knowledge/Cargo.toml crates/casper-knowledge/Cargo.toml
 COPY crates/casper-mcp/Cargo.toml crates/casper-mcp/Cargo.toml
 COPY crates/casper-agent/Cargo.toml crates/casper-agent/Cargo.toml
+COPY crates/casper-wire/Cargo.toml crates/casper-wire/Cargo.toml
 COPY casper-server/Cargo.toml casper-server/Cargo.toml
 COPY casper-cli/Cargo.toml casper-cli/Cargo.toml
+COPY casper-agent-backend/Cargo.toml casper-agent-backend/Cargo.toml
 
 # Create stub source files so cargo can resolve the workspace and cache deps.
 # This avoids re-downloading all dependencies when only source code changes.
@@ -30,8 +32,10 @@ RUN mkdir -p crates/casper-base/src && echo "pub fn _stub(){}" > crates/casper-b
     mkdir -p crates/casper-knowledge/src && echo "pub fn _stub(){}" > crates/casper-knowledge/src/lib.rs && \
     mkdir -p crates/casper-mcp/src && echo "pub fn _stub(){}" > crates/casper-mcp/src/lib.rs && \
     mkdir -p crates/casper-agent/src && echo "pub fn _stub(){}" > crates/casper-agent/src/lib.rs && \
+    mkdir -p crates/casper-wire/src && echo "pub fn _stub(){}" > crates/casper-wire/src/lib.rs && \
     mkdir -p casper-server/src && echo "fn main(){}" > casper-server/src/main.rs && \
-    mkdir -p casper-cli/src && echo "fn main(){}" > casper-cli/src/main.rs
+    mkdir -p casper-cli/src && echo "fn main(){}" > casper-cli/src/main.rs && \
+    mkdir -p casper-agent-backend/src && echo "fn main(){}" > casper-agent-backend/src/main.rs
 
 # Pre-build dependencies (this layer is cached unless Cargo.toml/Cargo.lock change)
 RUN cargo build --release -p casper-server 2>/dev/null || true
@@ -40,10 +44,11 @@ RUN cargo build --release -p casper-server 2>/dev/null || true
 COPY crates/ crates/
 COPY casper-server/ casper-server/
 COPY casper-cli/ casper-cli/
+COPY casper-agent-backend/ casper-agent-backend/
 COPY migrations/ migrations/
 
 # Touch source files to invalidate the stub builds
-RUN find crates/ casper-server/ casper-cli/ -name "*.rs" -exec touch {} +
+RUN find crates/ casper-server/ casper-cli/ casper-agent-backend/ -name "*.rs" -exec touch {} +
 
 # Build the real binary
 RUN cargo build --release -p casper-server

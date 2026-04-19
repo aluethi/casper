@@ -1,6 +1,7 @@
 pub mod agent_backend_routes;
 pub mod agent_routes;
 pub mod apikey_routes;
+pub mod connection_routes;
 pub mod auth_routes;
 pub mod backend_routes;
 pub mod catalog_routes;
@@ -12,6 +13,7 @@ pub mod inference_routes;
 pub mod knowledge_routes;
 pub mod memory_routes;
 pub mod model_routes;
+pub mod oauth_provider_routes;
 pub mod quota_routes;
 pub mod run_routes;
 pub mod secret_routes;

@@ -9,6 +9,7 @@ use axum::{
 };
 use casper_base::CasperError;
 use casper_proxy::StreamEvent;
+use serde::Deserialize;
 use futures::{stream::Stream, StreamExt};
 use uuid::Uuid;
 
@@ -120,6 +121,11 @@ async fn run_agent_stream(
     ).await?;
 
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
+    // Channel for user responses to ask_user questions
+    let (ask_tx, ask_rx) = tokio::sync::mpsc::channel::<String>(1);
+
+    // Store the ask sender so the respond endpoint can reach it
+    state.pending_asks.insert(conversation_id, ask_tx);
 
     // Spawn the agent engine in the background
     let state_clone = state.clone();
@@ -145,10 +151,12 @@ async fn run_agent_stream(
             &actor_clone,
             &metadata,
             tx.clone(),
+            ask_rx,
         ).await {
             let _ = tx.send(StreamEvent::Error { message: e.to_string() }).await;
         }
-        // tx is dropped here, closing the stream
+        // Clean up the pending_asks entry
+        state_clone.pending_asks.remove(&conversation_id);
     });
 
     // Convert the mpsc receiver to an SSE stream
@@ -158,6 +166,9 @@ async fn run_agent_stream(
             StreamEvent::ContentDelta { .. } => "content_delta",
             StreamEvent::ToolCallStart { .. } => "tool_call_start",
             StreamEvent::ToolResult { .. } => "tool_result",
+            StreamEvent::ConnectRequired { .. } => "connect_required",
+            StreamEvent::McpOAuthRequired { .. } => "mcp_oauth_required",
+            StreamEvent::AskUser { .. } => "ask_user",
             StreamEvent::Done { .. } => "done",
             StreamEvent::Error { .. } => "error",
         };
@@ -166,6 +177,29 @@ async fn run_agent_stream(
     });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// POST /api/v1/agents/respond -- Submit a user's answer to an ask_user question.
+#[derive(Deserialize)]
+struct RespondRequest {
+    conversation_id: Uuid,
+    answer: String,
+}
+
+async fn respond_to_ask(
+    State(state): State<AppState>,
+    _guard: ScopeGuard,
+    Json(body): Json<RespondRequest>,
+) -> Result<Json<serde_json::Value>, CasperError> {
+    let sender = state.pending_asks.get(&body.conversation_id)
+        .ok_or_else(|| CasperError::NotFound(
+            "no pending question for this conversation".into()
+        ))?;
+
+    sender.send(body.answer).await
+        .map_err(|_| CasperError::Internal("engine is no longer waiting for input".into()))?;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// GET /api/v1/agents/:name/tasks/:task_id -- Poll async task result.
@@ -185,6 +219,7 @@ pub fn run_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/agents/{name}/run", post(run_agent))
         .route("/api/v1/agents/{name}/run/stream", post(run_agent_stream))
+        .route("/api/v1/agents/respond", post(respond_to_ask))
         .route(
             "/api/v1/agents/{name}/tasks/{task_id}",
             get(get_task_status),

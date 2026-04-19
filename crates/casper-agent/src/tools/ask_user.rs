@@ -1,7 +1,9 @@
 //! `ask_user` tool: requests input from the human user.
 //!
-//! Returns a sentinel value that the engine interprets to pause execution
-//! and wait for user input. Not wired to notification yet.
+//! Returns an `__ask_user__` sentinel that the engine intercepts. In the
+//! streaming path, the engine sends a `StreamEvent::AskUser` to the client,
+//! then awaits the user's response via the `ask_rx` channel. The response
+//! endpoint `POST /api/v1/agents/respond` delivers the answer back.
 
 use async_trait::async_trait;
 use casper_base::CasperError;

@@ -40,6 +40,8 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub async_tasks: Arc<DashMap<Uuid, Option<serde_json::Value>>>,
     pub agent_registry: Arc<ws::AgentBackendRegistry>,
+    /// Pending ask_user responses: conversation_id → sender for user's answer.
+    pub pending_asks: Arc<DashMap<Uuid, tokio::sync::mpsc::Sender<String>>>,
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -80,6 +82,8 @@ async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>>
         ("0002_tenant", include_str!("../../migrations/0002_tenant.sql")),
         ("0003_agent_backends", include_str!("../../migrations/0003_agent_backends.sql")),
         ("0004_deployment_fallback", include_str!("../../migrations/0004_deployment_fallback.sql")),
+        ("0005_user_connections", include_str!("../../migrations/0005_user_connections.sql")),
+        ("0006_mcp_oauth", include_str!("../../migrations/0006_mcp_oauth.sql")),
     ];
 
     for (name, sql) in migration_files {
@@ -203,6 +207,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Dev mode: deterministic key (NOT secure — for development only)
             tracing::warn!("Dev mode: using insecure deterministic vault master key");
             b"casper-dev-master-key-not-secure!".to_vec()
+        } else if let Ok(b64) = std::env::var("CASPER_MASTER_KEY") {
+            // Base64-encoded master key from environment (container deployments)
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.decode(&b64)
+                .unwrap_or_else(|e| panic!("CASPER_MASTER_KEY is not valid base64: {e}"))
         } else if let Some(ref path) = config.auth.master_key_file {
             std::fs::read(path).unwrap_or_else(|e| panic!("failed to read master key from {path}: {e}"))
         } else {
@@ -249,6 +258,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client,
         async_tasks: Arc::new(DashMap::new()),
         agent_registry,
+        pending_asks: Arc::new(DashMap::new()),
     };
 
     // Auth middleware state — uses owner pool to bypass RLS for API key lookups
@@ -285,6 +295,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::feedback_routes::feedback_router())
         .merge(routes::training_routes::training_router())
         .merge(routes::agent_backend_routes::agent_backend_router())
+        .merge(routes::oauth_provider_routes::oauth_provider_router())
+        .merge(routes::connection_routes::connection_router())
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             auth::auth_middleware,
@@ -296,7 +308,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/metrics", get(metrics_handler))
         .route("/agent/connect", get(ws::agent_ws_handler))
-        .merge(auth_router());
+        .merge(auth_router())
+        .merge(routes::connection_routes::connection_callback_router());
 
     let app = Router::new()
         .merge(authenticated)

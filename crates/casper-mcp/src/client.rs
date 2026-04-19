@@ -114,12 +114,22 @@ impl McpClient {
         name: &str,
         input: serde_json::Value,
     ) -> Result<serde_json::Value, McpError> {
+        self.call_tool_with_auth(name, input, None).await
+    }
+
+    /// Call a tool with an optional auth token override (for per-user OAuth tokens).
+    pub async fn call_tool_with_auth(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        auth_override: Option<&str>,
+    ) -> Result<serde_json::Value, McpError> {
         let params = json!({
             "name": name,
             "arguments": input,
         });
 
-        let response = self.rpc_call("tools/call", params).await?;
+        let response = self.rpc_call_with_auth("tools/call", params, auth_override).await?;
         debug!(tool = name, "MCP tool call completed");
         Ok(response)
     }
@@ -129,6 +139,16 @@ impl McpClient {
         &self,
         method: &str,
         params: serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        self.rpc_call_with_auth(method, params, None).await
+    }
+
+    /// Send a JSON-RPC 2.0 request with an optional auth token override.
+    async fn rpc_call_with_auth(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        auth_override: Option<&str>,
     ) -> Result<serde_json::Value, McpError> {
         self.ensure_initialized().await?;
 
@@ -145,7 +165,10 @@ impl McpClient {
 
         let mut http_req = self.http_client.post(&self.url).json(&request);
 
-        if let Some(ref token) = self.auth_token {
+        // Auth override takes precedence (for per-user OAuth tokens)
+        if let Some(token) = auth_override {
+            http_req = http_req.bearer_auth(token);
+        } else if let Some(ref token) = self.auth_token {
             http_req = http_req.bearer_auth(token);
         }
 

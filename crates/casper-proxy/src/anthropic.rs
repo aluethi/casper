@@ -155,11 +155,13 @@ pub async fn call_stream(
 
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
+    // Override the client's global timeout — streaming responses can run for minutes
     let response = client
         .post(&url)
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json")
+        .timeout(std::time::Duration::from_secs(600))
         .json(&body)
         .send()
         .await
