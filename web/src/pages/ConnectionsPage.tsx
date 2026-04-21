@@ -72,6 +72,11 @@ export default function ConnectionsPage() {
   const [mcpDisplayName, setMcpDisplayName] = useState('')
   const [registering, setRegistering] = useState(false)
 
+  // Re-register MCP
+  const [reregisterName, setReregisterName] = useState<string | null>(null)
+  const [reregisterUrl, setReregisterUrl] = useState('')
+  const [reregistering, setReregistering] = useState(false)
+
   // Edit
   const [editName, setEditName] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ ...emptyForm })
@@ -245,6 +250,25 @@ export default function ConnectionsPage() {
     } finally { setRegistering(false) }
   }
 
+  const startReregister = (p: OAuthProvider) => {
+    const host = p.name.replace(/^mcp:/, '')
+    setReregisterName(p.name)
+    setReregisterUrl(`https://${host}/`)
+  }
+
+  const reregisterMcp = async () => {
+    if (!reregisterUrl.trim() || !reregisterName) return
+    setReregistering(true); setError('')
+    try {
+      await api.post('/api/v1/oauth-providers/register-mcp', { mcp_url: reregisterUrl.trim() })
+      setReregisterName(null); setReregisterUrl('')
+      setSuccess('MCP server re-registered successfully. Client credentials have been updated.')
+      await reload()
+    } catch (e: any) {
+      setError(e.response?.data?.message ?? e.message)
+    } finally { setReregistering(false) }
+  }
+
   if (loading) return <p className="text-slate-500">Loading...</p>
 
   return (
@@ -390,7 +414,9 @@ export default function ConnectionsPage() {
                 )}
                 {providers.map(p => {
                   const userCount = connections.filter(c => c.provider === p.name).length
+                  const isMcp = p.name.startsWith('mcp:')
                   const isEditing = editName === p.name
+                  const isReregistering = reregisterName === p.name
                   return isEditing ? (
                     <tr key={p.name} className="bg-blue-50/50">
                       <td colSpan={6} className="px-4 py-4">
@@ -416,6 +442,27 @@ export default function ConnectionsPage() {
                         </div>
                       </td>
                     </tr>
+                  ) : isReregistering ? (
+                    <tr key={p.name} className="bg-amber-50/50">
+                      <td colSpan={6} className="px-4 py-4">
+                        <h4 className="text-xs font-semibold text-amber-800 mb-1">Re-register: {p.display_name}</h4>
+                        <p className="text-xs text-slate-500 mb-3">
+                          Re-runs OAuth discovery and Dynamic Client Registration with the current server redirect URI.
+                        </p>
+                        <div className="flex gap-2 items-end">
+                          <Field label="MCP Server URL" value={reregisterUrl} onChange={setReregisterUrl}
+                            placeholder="https://mcp.example.com/apps/mcp" className="flex-1" />
+                          <button onClick={reregisterMcp} disabled={reregistering || !reregisterUrl.trim()}
+                            className="bg-amber-600 text-white px-4 py-1.5 rounded-full text-sm font-semibold hover:bg-amber-500 disabled:opacity-40 transition-colors whitespace-nowrap">
+                            {reregistering ? 'Re-registering...' : 'Re-register'}
+                          </button>
+                          <button onClick={() => { setReregisterName(null); setReregisterUrl('') }}
+                            className="rounded-full text-sm font-medium text-slate-600 ring-1 ring-slate-300 hover:bg-slate-50 px-4 py-1.5 transition-colors">
+                            Cancel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
                   ) : (
                     <tr key={p.name} className={`hover:bg-slate-50 ${!p.is_active ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-3">
@@ -435,6 +482,9 @@ export default function ConnectionsPage() {
                       </td>
                       <td className="px-4 py-3 text-slate-600">{userCount}</td>
                       <td className="px-4 py-3 text-right space-x-2">
+                        {isMcp && (
+                          <button onClick={() => startReregister(p)} className="text-xs text-amber-600 hover:text-amber-800">Re-register</button>
+                        )}
                         <button onClick={() => startEdit(p)} className="text-xs text-blue-600 hover:text-blue-800">Edit</button>
                         {p.is_active ? (
                           <button onClick={() => toggleActive(p.name, false)} className="text-xs text-amber-600 hover:text-amber-800">Deactivate</button>

@@ -1,121 +1,23 @@
-//! LLM caller abstraction: trait + real and mock implementations.
+//! Mock LLM caller for testing.
 //!
-//! The `LlmCaller` trait abstracts LLM calls so the engine can be tested
-//! with mock responses. The real implementation routes through
-//! `casper-catalog` (deployment resolution, quota, and dispatch with
-//! retry/fallback).
+//! The `LlmCaller` trait is defined in `casper-catalog`. The real
+//! implementation lives in `casper-server` where concrete infrastructure
+//! (HTTP clients, WebSocket registries) is available.
 
+#[cfg(test)]
 use casper_base::CasperError;
 #[cfg(test)]
-use casper_catalog::MessageRole;
-use casper_catalog::{LlmRequest, LlmResponse, StreamEvent};
-use sqlx::PgPool;
-use tokio::sync::mpsc;
+use casper_catalog::{LlmCaller, LlmResponse, MessageRole};
+#[cfg(test)]
 use uuid::Uuid;
 
-/// Trait abstracting LLM calls so we can mock in tests.
-#[async_trait::async_trait]
-pub trait LlmCaller: Send + Sync {
-    async fn call(
-        &self,
-        tenant_id: Uuid,
-        request: &LlmRequest,
-    ) -> Result<(LlmResponse, Option<Uuid>), CasperError>;
-
-    /// Streaming variant: sends events to `tx` and returns the accumulated response.
-    /// Default implementation falls back to non-streaming.
-    async fn call_stream(
-        &self,
-        tenant_id: Uuid,
-        request: &LlmRequest,
-        tx: mpsc::Sender<StreamEvent>,
-    ) -> Result<(LlmResponse, Option<Uuid>), CasperError> {
-        let (response, backend_id) = self.call(tenant_id, request).await?;
-        // Emit the buffered response as stream events
-        if let Some(ref thinking) = response.thinking {
-            let _ = tx
-                .send(StreamEvent::Thinking {
-                    delta: thinking.clone(),
-                })
-                .await;
-        }
-        if !response.content.is_empty() {
-            let _ = tx
-                .send(StreamEvent::ContentDelta {
-                    delta: response.content.clone(),
-                })
-                .await;
-        }
-        Ok((response, backend_id))
-    }
-}
-
-/// Real LLM caller that uses casper-catalog (routing + dispatch).
-pub struct RealLlmCaller {
-    pub db: PgPool,
-    pub http_client: reqwest::Client,
-}
-
-#[async_trait::async_trait]
-impl LlmCaller for RealLlmCaller {
-    async fn call(
-        &self,
-        tenant_id: Uuid,
-        request: &LlmRequest,
-    ) -> Result<(LlmResponse, Option<Uuid>), CasperError> {
-        let deployment =
-            casper_catalog::resolve_deployment(&self.db, tenant_id, &request.model).await?;
-        casper_catalog::check_quota(&self.db, tenant_id, deployment.model_id).await?;
-
-        let merged_extra = casper_catalog::merge_params(&deployment.default_params, &request.extra);
-
-        let mut patched_request = request.clone();
-        patched_request.model = deployment.model_name.clone();
-        patched_request.extra = merged_extra;
-
-        let (response, backend) =
-            casper_catalog::dispatch_with_retry(&self.http_client, &deployment, &patched_request)
-                .await?;
-
-        Ok((response, Some(backend.id)))
-    }
-
-    async fn call_stream(
-        &self,
-        tenant_id: Uuid,
-        request: &LlmRequest,
-        tx: mpsc::Sender<StreamEvent>,
-    ) -> Result<(LlmResponse, Option<Uuid>), CasperError> {
-        let deployment =
-            casper_catalog::resolve_deployment(&self.db, tenant_id, &request.model).await?;
-        casper_catalog::check_quota(&self.db, tenant_id, deployment.model_id).await?;
-
-        let merged_extra = casper_catalog::merge_params(&deployment.default_params, &request.extra);
-
-        let mut patched_request = request.clone();
-        patched_request.model = deployment.model_name.clone();
-        patched_request.extra = merged_extra;
-        patched_request.stream = true;
-
-        let (response, backend) = casper_catalog::dispatch_stream_with_retry(
-            &self.http_client,
-            &deployment,
-            &patched_request,
-            tx,
-        )
-        .await?;
-
-        Ok((response, Some(backend.id)))
-    }
-}
-
-/// Mock LLM caller for testing. Returns canned responses.
+#[cfg(test)]
+use casper_catalog::LlmRequest;
 #[cfg(test)]
 use serde_json::json;
 
 #[cfg(test)]
 pub struct MockLlmCaller {
-    /// Responses to return, consumed in order.
     responses: std::sync::Mutex<Vec<LlmResponse>>,
 }
 
@@ -127,7 +29,6 @@ impl MockLlmCaller {
         }
     }
 
-    /// Create a mock that returns a simple text response.
     pub fn simple(text: &str) -> Self {
         Self::new(vec![LlmResponse {
             content: text.to_string(),
@@ -143,7 +44,6 @@ impl MockLlmCaller {
         }])
     }
 
-    /// Create a mock that first returns a tool call, then a text response.
     pub fn with_tool_call(
         tool_name: &str,
         tool_input: serde_json::Value,

@@ -1,11 +1,7 @@
 use casper_base::UsageEvent;
 use casper_base::scope::has_scope;
 use casper_base::{CasperError, Scope};
-use casper_catalog::{LlmRequest, LlmResponse, Message, dispatch_with_retry};
-use casper_catalog::{
-    ResolvedBackend, ResolvedDeployment, check_quota, merge_params, resolve_deployment,
-    resolve_deployment_by_id,
-};
+use casper_catalog::{LlmRequest, Message, resolve_deployment, resolve_deployment_by_id};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -107,7 +103,6 @@ pub async fn chat_completions(
         ));
     }
 
-    // Parse messages once (shared across fallback chain)
     let messages: Vec<Message> = req
         .messages
         .iter()
@@ -121,51 +116,35 @@ pub async fn chat_completions(
         })
         .collect();
 
-    // Resolve primary deployment
-    let mut deployment = resolve_deployment(&state.db_owner, tenant_id, slug).await?;
+    // Walk the deployment fallback chain.
+    // Each call to llm_caller.call() handles backend-level retry/fallback internally.
+    let mut current_slug = slug.clone();
     let mut last_error: Option<CasperError> = None;
 
-    // Walk the deployment fallback chain
     for depth in 0..=MAX_FALLBACK_DEPTH {
-        // Check quota for this deployment's model
-        check_quota(&state.db_owner, tenant_id, deployment.model_id).await?;
-
-        // Build LlmRequest for this deployment
-        let merged_extra = merge_params(&deployment.default_params, &req.extra);
-        let max_tokens = req.max_tokens.or_else(|| {
-            deployment.default_params["max_tokens"]
-                .as_i64()
-                .map(|v| v as i32)
-        });
-        let temperature = req
-            .temperature
-            .or_else(|| deployment.default_params["temperature"].as_f64());
-
         let llm_request = LlmRequest {
             messages: messages.clone(),
-            model: deployment.model_name.clone(),
-            max_tokens,
-            temperature,
+            model: current_slug.clone(),
+            max_tokens: req.max_tokens,
+            temperature: req.temperature,
             stream: false,
             tools: req.tools.clone(),
-            extra: merged_extra,
+            extra: req.extra.clone(),
         };
 
-        // Try dispatching through this deployment's backends
-        match dispatch_with_agent_support(state, &deployment, &llm_request).await {
-            Ok((llm_response, used_backend)) => {
-                // Record usage
+        match state.llm_caller.call(tenant_id, &llm_request).await {
+            Ok((llm_response, backend_id)) => {
                 let usage_event = UsageEvent {
                     tenant_id,
                     source: "inference".to_string(),
-                    model: deployment.model_name.clone(),
-                    deployment_slug: Some(deployment.slug.clone()),
+                    model: current_slug.clone(),
+                    deployment_slug: Some(current_slug.clone()),
                     agent_name: None,
                     input_tokens: llm_response.input_tokens,
                     output_tokens: llm_response.output_tokens,
                     cache_read_tokens: llm_response.cache_read_tokens,
                     cache_write_tokens: llm_response.cache_write_tokens,
-                    backend_id: Some(used_backend.id),
+                    backend_id,
                     correlation_id,
                 };
                 let usage_recorder = state.usage.clone();
@@ -175,26 +154,23 @@ pub async fn chat_completions(
                     }
                 });
 
-                // Build response
                 let response_id = format!("chatcmpl-{}", Uuid::now_v7().simple());
-                let choice_message = ChoiceMessage {
-                    role: llm_response.role.to_string(),
-                    content: if llm_response.content.is_empty() {
-                        None
-                    } else {
-                        Some(llm_response.content.clone())
-                    },
-                    tool_calls: llm_response.tool_calls.clone(),
-                    thinking: llm_response.thinking.clone(),
-                };
-
                 return Ok(ChatCompletionResponse {
                     id: response_id,
                     object: "chat.completion",
                     model: slug.clone(),
                     choices: vec![Choice {
                         index: 0,
-                        message: choice_message,
+                        message: ChoiceMessage {
+                            role: llm_response.role.to_string(),
+                            content: if llm_response.content.is_empty() {
+                                None
+                            } else {
+                                Some(llm_response.content.clone())
+                            },
+                            tool_calls: llm_response.tool_calls.clone(),
+                            thinking: llm_response.thinking.clone(),
+                        },
                         finish_reason: llm_response.finish_reason.clone(),
                     }],
                     usage: Usage {
@@ -205,7 +181,6 @@ pub async fn chat_completions(
                 });
             }
             Err(e) => {
-                // Client errors are not retryable across deployments
                 if matches!(
                     e,
                     CasperError::BadRequest(_)
@@ -217,7 +192,7 @@ pub async fn chat_completions(
                 }
 
                 tracing::warn!(
-                    deployment_slug = %deployment.slug,
+                    deployment_slug = %current_slug,
                     depth,
                     error = %e,
                     "deployment backends exhausted"
@@ -225,13 +200,17 @@ pub async fn chat_completions(
                 last_error = Some(e);
 
                 // Try fallback deployment if configured
+                let deployment =
+                    resolve_deployment(&state.db_owner, tenant_id, &current_slug).await?;
                 if let Some(fallback_id) = deployment.fallback_deployment_id {
+                    let fallback =
+                        resolve_deployment_by_id(&state.db_owner, fallback_id).await?;
                     tracing::info!(
-                        from = %deployment.slug,
-                        fallback_id = %fallback_id,
+                        from = %current_slug,
+                        to = %fallback.slug,
                         "falling back to next deployment"
                     );
-                    deployment = resolve_deployment_by_id(&state.db_owner, fallback_id).await?;
+                    current_slug = fallback.slug;
                 } else {
                     break;
                 }
@@ -293,88 +272,3 @@ pub async fn list_models(
     })
 }
 
-// ── Agent-aware dispatch (internal) ──────────────────────────────
-
-/// Dispatch with retry/fallback, supporting both HTTP and agent backends.
-async fn dispatch_with_agent_support<'a>(
-    state: &AppState,
-    deployment: &'a ResolvedDeployment,
-    request: &LlmRequest,
-) -> Result<(LlmResponse, &'a ResolvedBackend), CasperError> {
-    let has_agent = deployment
-        .backend_sequence
-        .iter()
-        .any(|b| b.provider == "agent");
-
-    if !has_agent {
-        return dispatch_with_retry(&state.http_client, deployment, request).await;
-    }
-
-    let mut last_error: Option<CasperError> = None;
-    let timeout_ms = deployment.timeout_ms as u64;
-
-    for (idx, backend) in deployment.backend_sequence.iter().enumerate() {
-        tracing::debug!(
-            backend_name = %backend.name,
-            backend_provider = %backend.provider,
-            idx,
-            "attempting dispatch (agent-aware)"
-        );
-
-        for attempt in 0..=deployment.retry_attempts {
-            if attempt > 0 {
-                let delay_ms = deployment.retry_backoff_ms as u64 * (1u64 << (attempt as u64 - 1));
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            }
-
-            let result = if backend.provider == "agent" {
-                if !state.agent_registry.is_available(&backend.id) {
-                    Err(CasperError::Unavailable(format!(
-                        "no agent backend connections for '{}'",
-                        backend.name
-                    )))
-                } else {
-                    state
-                        .agent_registry
-                        .dispatch(backend.id, request, timeout_ms)
-                        .await
-                }
-            } else {
-                casper_catalog::dispatch(&state.http_client, backend, request).await
-            };
-
-            match result {
-                Ok(response) => return Ok((response, backend)),
-                Err(e) => {
-                    tracing::warn!(
-                        backend_name = %backend.name,
-                        attempt,
-                        error = %e,
-                        "dispatch attempt failed"
-                    );
-                    if matches!(
-                        e,
-                        CasperError::BadRequest(_)
-                            | CasperError::Unauthorized
-                            | CasperError::Forbidden(_)
-                            | CasperError::NotFound(_)
-                    ) {
-                        return Err(e);
-                    }
-                    last_error = Some(e);
-                }
-            }
-        }
-
-        if !deployment.fallback_enabled {
-            break;
-        }
-
-        tracing::info!(
-            backend_name = %backend.name,
-            "all retries exhausted, falling back to next backend"
-        );
-    }
-
-    Err(last_error.unwrap_or_else(|| CasperError::Unavailable("all backends exhausted".into())))
-}

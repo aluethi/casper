@@ -196,6 +196,7 @@ pub async fn execute_run(
             state.db_owner.clone(),
             state.http_client.clone(),
             casper_agent::tools::ToolDispatcher::new(),
+            std::sync::Arc::clone(&state.llm_caller),
             Some(state.audit.clone()),
             Some(state.usage.clone()),
         );

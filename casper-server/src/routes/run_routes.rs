@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -144,6 +145,7 @@ async fn run_agent_stream(
             state_clone.db_owner.clone(),
             state_clone.http_client.clone(),
             casper_agent::tools::ToolDispatcher::new(),
+            Arc::clone(&state_clone.llm_caller),
             Some(state_clone.audit.clone()),
             Some(state_clone.usage.clone()),
         );

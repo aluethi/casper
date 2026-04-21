@@ -37,7 +37,7 @@ pub struct RunStreamRequest {
 
 #[cfg(test)]
 pub use llm::MockLlmCaller;
-pub use llm::{LlmCaller, RealLlmCaller};
+pub use casper_catalog::LlmCaller;
 
 /// Maximum number of ReAct loop iterations before we bail out.
 const DEFAULT_MAX_TURNS: usize = 25;
@@ -80,18 +80,14 @@ pub struct AgentEngine {
 }
 
 impl AgentEngine {
-    /// Create an engine with the real LLM caller.
     pub fn new(
         db: PgPool,
         http_client: reqwest::Client,
         tool_dispatcher: ToolDispatcher,
+        llm_caller: Arc<dyn LlmCaller>,
         audit_writer: Option<AuditWriter>,
         usage_recorder: Option<UsageRecorder>,
     ) -> Self {
-        let llm_caller = Arc::new(RealLlmCaller {
-            db: db.clone(),
-            http_client: http_client.clone(),
-        });
         Self {
             db,
             http_client,
@@ -99,24 +95,6 @@ impl AgentEngine {
             llm_caller,
             audit_writer,
             usage_recorder,
-            delegation_depth: 0,
-        }
-    }
-
-    /// Create an engine with a custom LLM caller (for testing).
-    #[cfg(test)]
-    pub fn with_caller(
-        db: PgPool,
-        tool_dispatcher: ToolDispatcher,
-        llm_caller: Arc<dyn LlmCaller>,
-    ) -> Self {
-        Self {
-            db: db.clone(),
-            http_client: reqwest::Client::new(),
-            tool_dispatcher,
-            llm_caller,
-            audit_writer: None,
-            usage_recorder: None,
             delegation_depth: 0,
         }
     }
@@ -1033,7 +1011,7 @@ mod tests {
         let dispatcher = ToolDispatcher::new();
         let caller = Arc::new(MockLlmCaller::simple("Hello, I'm the agent!"));
 
-        let engine = AgentEngine::with_caller(pool, dispatcher, caller);
+        let engine = AgentEngine::new(pool, reqwest::Client::new(), dispatcher, caller, None, None);
 
         // We can't actually run the full engine because it tries to load from DB,
         // but we can verify the mock caller works.
@@ -1068,7 +1046,7 @@ mod tests {
             "Done echoing!",
         ));
 
-        let engine = AgentEngine::with_caller(pool, dispatcher, caller);
+        let engine = AgentEngine::new(pool, reqwest::Client::new(), dispatcher, caller, None, None);
 
         // Verify the mock produces tool calls then a final response
         let request = LlmRequest {

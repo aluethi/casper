@@ -6,7 +6,7 @@
 # Usage:
 #   docker compose --profile agent-backend up -d agent-backend
 
-casper_url: ws://app:3000/agent/connect
+casper_url: wss://app.ventoo.ai/agent/connect
 
 backends:
   - key: csa-REPLACE_ME

@@ -36,6 +36,7 @@ futures = { workspace = true }
 tokio-stream = { workspace = true }
 url = { workspace = true }
 rand = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }

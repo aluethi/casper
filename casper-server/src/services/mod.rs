@@ -1,4 +1,5 @@
 pub mod agent_service;
+pub mod llm_caller;
 pub mod apikey_service;
 pub mod backend_service;
 pub mod connection_service;
