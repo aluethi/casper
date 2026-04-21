@@ -1,29 +1,26 @@
-# Casper Platform — Production (single VM)
+# Casper Platform — Production (single VM behind Azure Front Door)
 #
-# Requires .env file with: POSTGRES_PASSWORD, ACR_IMAGE, DOMAIN,
-#   CASPER_DEV_AUTH, CASPER_ADMIN_EMAIL, and optionally CASPER_MASTER_KEY.
+# Requires .env file with: POSTGRES_PASSWORD, ACR_IMAGE, FRONT_DOOR_ID,
+#   CASPER_PUBLIC_URL, CASPER_DEV_AUTH, CASPER_ADMIN_EMAIL,
+#   and optionally CASPER_MASTER_KEY.
 #
 # Usage:
 #   docker compose -f docker-compose.prod.yml up -d
 
 services:
-  # ── Caddy (reverse proxy + auto-HTTPS) ──────────────────────────
+  # ── Caddy (reverse proxy, Front Door header validation) ─────────
   caddy:
     image: caddy:2
     restart: unless-stopped
     ports:
       - "80:80"
-      - "443:443"
-      - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
     depends_on:
       app:
         condition: service_healthy
     environment:
-      DOMAIN: ${DOMAIN}
+      FRONT_DOOR_ID: ${FRONT_DOOR_ID}
 
   # ── Casper Server ───────────────────────────────────────────────
   app:
@@ -32,7 +29,7 @@ services:
     environment:
       DATABASE_URL: postgres://casper:${POSTGRES_PASSWORD}@db:5432/casper
       DATABASE_OWNER_URL: postgres://casper:${POSTGRES_PASSWORD}@db:5432/casper
-      CASPER_PUBLIC_URL: https://${DOMAIN}
+      CASPER_PUBLIC_URL: ${CASPER_PUBLIC_URL}
       CASPER_DEV_AUTH: ${CASPER_DEV_AUTH:-true}
       CASPER_MASTER_KEY: ${CASPER_MASTER_KEY:-}
       CASPER_ADMIN_EMAIL: ${CASPER_ADMIN_EMAIL:-admin@ventoo.ch}
@@ -79,6 +76,4 @@ services:
 volumes:
   pgdata:
   knowledge_data:
-  caddy_data:
-  caddy_config:
   searxng_data:

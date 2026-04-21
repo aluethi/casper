@@ -1,14 +1,16 @@
 // ═══════════════════════════════════════════════════════════════════
-// Casper Platform — Azure VM Deployment
+// Casper Platform — Azure VM Deployment (behind Front Door)
 // ═══════════════════════════════════════════════════════════════════
 //
 // Deploys a single VM running Docker Compose (casper-server, PostgreSQL,
 // SearXNG, Caddy reverse proxy) plus an ACR for the Docker image.
+// The VM is locked down to only accept traffic from Azure Front Door.
 //
 // Usage:
 //   az group create -n rg-casper -l switzerlandnorth
 //   az deployment group create -g rg-casper -f infra/main.bicep \
-//     -p sshPublicKey="$(cat ~/.ssh/casper-deploy.pub)"
+//     -p sshPublicKey="$(cat ~/.ssh/casper-deploy.pub)" \
+//        frontDoorId="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 //
 // The GitHub Actions workflow (deploy.yml) automates this.
 
@@ -21,6 +23,9 @@ param location string = resourceGroup().location
 
 @description('SSH public key for VM access')
 param sshPublicKey string
+
+@description('Front Door instance ID (for X-Azure-FDID header validation)')
+param frontDoorId string
 
 @description('VM admin username')
 param adminUsername string = 'casperadmin'
@@ -92,11 +97,24 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
         }
       }
       {
-        name: 'HTTP'
+        name: 'HTTP-from-FrontDoor'
         properties: {
           priority: 200
           direction: 'Inbound'
           access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'AzureFrontDoor.Backend'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '80'
+        }
+      }
+      {
+        name: 'DenyHTTP-Direct'
+        properties: {
+          priority: 300
+          direction: 'Inbound'
+          access: 'Deny'
           protocol: 'Tcp'
           sourceAddressPrefix: '*'
           sourcePortRange: '*'
@@ -105,11 +123,11 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
         }
       }
       {
-        name: 'HTTPS'
+        name: 'DenyHTTPS-Direct'
         properties: {
-          priority: 300
+          priority: 400
           direction: 'Inbound'
-          access: 'Allow'
+          access: 'Deny'
           protocol: 'Tcp'
           sourceAddressPrefix: '*'
           sourcePortRange: '*'
@@ -184,8 +202,8 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
     storageProfile: {
       imageReference: {
         publisher: 'Canonical'
-        offer: '0001-com-ubuntu-server-noble'
-        sku: '24_04-lts-gen2'
+        offer: 'ubuntu-24_04-lts'
+        sku: 'server'
         version: 'latest'
       }
       osDisk: {
@@ -207,3 +225,4 @@ output acrLoginServer string = acr.properties.loginServer
 output vmPublicIp string = publicIp.properties.ipAddress
 output vmFqdn string = publicIp.properties.dnsSettings.fqdn
 output sshCommand string = 'ssh ${adminUsername}@${publicIp.properties.dnsSettings.fqdn}'
+output frontDoorId string = frontDoorId

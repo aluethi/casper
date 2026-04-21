@@ -1,3 +1,9 @@
-{$DOMAIN} {
+:80 {
+	# Validate requests come from Azure Front Door
+	@not_frontdoor {
+		not header X-Azure-FDID {$FRONT_DOOR_ID}
+	}
+	respond @not_frontdoor 403
+
 	reverse_proxy app:3000
 }

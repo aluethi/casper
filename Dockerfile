@@ -6,14 +6,7 @@ WORKDIR /app
 # Copy manifests first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 COPY crates/casper-base/Cargo.toml crates/casper-base/Cargo.toml
-COPY crates/casper-db/Cargo.toml crates/casper-db/Cargo.toml
-COPY crates/casper-auth/Cargo.toml crates/casper-auth/Cargo.toml
-COPY crates/casper-vault/Cargo.toml crates/casper-vault/Cargo.toml
-COPY crates/casper-observe/Cargo.toml crates/casper-observe/Cargo.toml
 COPY crates/casper-catalog/Cargo.toml crates/casper-catalog/Cargo.toml
-COPY crates/casper-proxy/Cargo.toml crates/casper-proxy/Cargo.toml
-COPY crates/casper-knowledge/Cargo.toml crates/casper-knowledge/Cargo.toml
-COPY crates/casper-mcp/Cargo.toml crates/casper-mcp/Cargo.toml
 COPY crates/casper-agent/Cargo.toml crates/casper-agent/Cargo.toml
 COPY crates/casper-wire/Cargo.toml crates/casper-wire/Cargo.toml
 COPY casper-server/Cargo.toml casper-server/Cargo.toml
@@ -23,14 +16,7 @@ COPY casper-agent-backend/Cargo.toml casper-agent-backend/Cargo.toml
 # Create stub source files so cargo can resolve the workspace and cache deps.
 # This avoids re-downloading all dependencies when only source code changes.
 RUN mkdir -p crates/casper-base/src && echo "pub fn _stub(){}" > crates/casper-base/src/lib.rs && \
-    mkdir -p crates/casper-db/src && echo "pub fn _stub(){}" > crates/casper-db/src/lib.rs && \
-    mkdir -p crates/casper-auth/src && echo "pub fn _stub(){}" > crates/casper-auth/src/lib.rs && \
-    mkdir -p crates/casper-vault/src && echo "pub fn _stub(){}" > crates/casper-vault/src/lib.rs && \
-    mkdir -p crates/casper-observe/src && echo "pub fn _stub(){}" > crates/casper-observe/src/lib.rs && \
     mkdir -p crates/casper-catalog/src && echo "pub fn _stub(){}" > crates/casper-catalog/src/lib.rs && \
-    mkdir -p crates/casper-proxy/src && echo "pub fn _stub(){}" > crates/casper-proxy/src/lib.rs && \
-    mkdir -p crates/casper-knowledge/src && echo "pub fn _stub(){}" > crates/casper-knowledge/src/lib.rs && \
-    mkdir -p crates/casper-mcp/src && echo "pub fn _stub(){}" > crates/casper-mcp/src/lib.rs && \
     mkdir -p crates/casper-agent/src && echo "pub fn _stub(){}" > crates/casper-agent/src/lib.rs && \
     mkdir -p crates/casper-wire/src && echo "pub fn _stub(){}" > crates/casper-wire/src/lib.rs && \
     mkdir -p casper-server/src && echo "fn main(){}" > casper-server/src/main.rs && \

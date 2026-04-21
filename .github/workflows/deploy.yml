@@ -44,6 +44,8 @@ env:
   RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'rg-casper' }}
   LOCATION: ${{ vars.LOCATION || 'switzerlandnorth' }}
   VM_USER: casperadmin
+  FRONT_DOOR_ID: ${{ vars.FRONT_DOOR_ID }}
+  FRONT_DOOR_HOSTNAME: ${{ vars.FRONT_DOOR_HOSTNAME }}
 
 jobs:
   deploy:
@@ -76,6 +78,7 @@ jobs:
           template: infra/main.bicep
           parameters: >-
             sshPublicKey=${{ secrets.VM_SSH_PUBLIC_KEY }}
+            frontDoorId=${{ env.FRONT_DOOR_ID }}
           failOnStdErr: false
 
       # ── Build & Push Docker Image ───────────────────────────────
@@ -132,7 +135,8 @@ jobs:
             cat > .env << 'ENVEOF'
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
             ACR_IMAGE=${{ steps.infra.outputs.acrLoginServer }}/casper-server:${{ github.sha }}
-            DOMAIN=${{ steps.infra.outputs.vmFqdn }}
+            FRONT_DOOR_ID=${{ env.FRONT_DOOR_ID }}
+            CASPER_PUBLIC_URL=https://${{ env.FRONT_DOOR_HOSTNAME }}
             CASPER_DEV_AUTH=true
             CASPER_ADMIN_EMAIL=admin@ventoo.ch
             ENVEOF
@@ -147,6 +151,7 @@ jobs:
         run: |
           echo "### Deployment complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **URL:** https://${{ steps.infra.outputs.vmFqdn }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Front Door:** https://${{ env.FRONT_DOOR_HOSTNAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Origin (VM):** ${{ steps.infra.outputs.vmPublicIp }}" >> $GITHUB_STEP_SUMMARY
           echo "- **SSH:** ${{ steps.infra.outputs.sshCommand }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Image:** \`casper-server:${GITHUB_SHA::8}\`" >> $GITHUB_STEP_SUMMARY
