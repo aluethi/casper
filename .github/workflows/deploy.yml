@@ -138,14 +138,14 @@ jobs:
                 -u ${{ steps.infra.outputs.acrName }} --password-stdin
 
             # Write .env
-            cat > .env << 'ENVEOF'
-            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-            ACR_IMAGE=${{ steps.infra.outputs.acrLoginServer }}/casper-server:${{ github.sha }}
-            FRONT_DOOR_ID=${{ env.FRONT_DOOR_ID }}
-            CASPER_PUBLIC_URL=https://${{ env.FRONT_DOOR_HOSTNAME }}
-            CASPER_DEV_AUTH=true
-            CASPER_ADMIN_EMAIL=admin@ventoo.ch
-            ENVEOF
+            printf '%s\n' \
+              "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" \
+              "ACR_IMAGE=${{ steps.infra.outputs.acrLoginServer }}/casper-server:${{ github.sha }}" \
+              "FRONT_DOOR_ID=${{ env.FRONT_DOOR_ID }}" \
+              "CASPER_PUBLIC_URL=https://${{ env.FRONT_DOOR_HOSTNAME }}" \
+              "CASPER_DEV_AUTH=true" \
+              "CASPER_ADMIN_EMAIL=admin@ventoo.ch" \
+              > .env
 
             # Pull and (re)start
             docker compose -f docker-compose.prod.yml pull

@@ -89,19 +89,18 @@ pub async fn create(
                 ));
             }
         },
-        "correction" => {
-            if req.correction.is_none() || req.correction.as_deref() == Some("") {
-                return Err(CasperError::BadRequest(
-                    "correction field is required for feedback_type 'correction'".into(),
-                ));
-            }
+        "correction"
+            if req.correction.is_none() || req.correction.as_deref() == Some("") =>
+        {
+            return Err(CasperError::BadRequest(
+                "correction field is required for feedback_type 'correction'".into(),
+            ));
         }
-        "tag" => {
-            if req.tags.is_empty() {
-                return Err(CasperError::BadRequest(
-                    "tags field must not be empty for feedback_type 'tag'".into(),
-                ));
-            }
+        "correction" => {}
+        "tag" if req.tags.is_empty() => {
+            return Err(CasperError::BadRequest(
+                "tags field must not be empty for feedback_type 'tag'".into(),
+            ));
         }
         _ => {}
     }

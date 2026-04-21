@@ -11,7 +11,7 @@ use crate::helpers::to_rfc3339;
 
 /// Estimate token count: ~4 characters per token.
 fn estimate_tokens(text: &str) -> i32 {
-    (text.len() / 4).max(0) as i32
+    (text.len() / 4) as i32
 }
 
 #[derive(Deserialize)]
