@@ -4,8 +4,8 @@ use casper_catalog::{
     check_quota, merge_params, resolve_deployment, resolve_deployment_by_id,
     ResolvedBackend, ResolvedDeployment,
 };
-use casper_observe::UsageEvent;
-use casper_proxy::{LlmRequest, LlmResponse, Message, dispatch_with_retry};
+use casper_base::UsageEvent;
+use casper_catalog::{LlmRequest, LlmResponse, Message, dispatch_with_retry};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -113,10 +113,10 @@ pub async fn chat_completions(
         .iter()
         .map(|m| {
             let role_str = m["role"].as_str().unwrap_or("user");
-            let role: casper_proxy::MessageRole = serde_json::from_value(
+            let role: casper_catalog::MessageRole = serde_json::from_value(
                 serde_json::Value::String(role_str.to_string()),
             )
-            .unwrap_or(casper_proxy::MessageRole::User);
+            .unwrap_or(casper_catalog::MessageRole::User);
             let content = m.get("content").cloned().unwrap_or(serde_json::Value::Null);
             Message { role, content }
         })
@@ -348,7 +348,7 @@ async fn dispatch_with_agent_support<'a>(
                         .await
                 }
             } else {
-                casper_proxy::dispatch(&state.http_client, backend, request).await
+                casper_catalog::dispatch(&state.http_client, backend, request).await
             };
 
             match result {

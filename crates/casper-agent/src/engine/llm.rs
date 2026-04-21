@@ -2,13 +2,13 @@
 //!
 //! The `LlmCaller` trait abstracts LLM calls so the engine can be tested
 //! with mock responses. The real implementation routes through
-//! `casper-catalog` (deployment resolution, quota) and `casper-proxy`
-//! (dispatch with retry/fallback).
+//! `casper-catalog` (deployment resolution, quota, and dispatch with
+//! retry/fallback).
 
 use casper_base::CasperError;
-use casper_proxy::{LlmRequest, LlmResponse, StreamEvent};
+use casper_catalog::{LlmRequest, LlmResponse, StreamEvent};
 #[cfg(test)]
-use casper_proxy::MessageRole;
+use casper_catalog::MessageRole;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -42,7 +42,7 @@ pub trait LlmCaller: Send + Sync {
     }
 }
 
-/// Real LLM caller that uses casper-catalog + casper-proxy.
+/// Real LLM caller that uses casper-catalog (routing + dispatch).
 pub struct RealLlmCaller {
     pub db: PgPool,
     pub http_client: reqwest::Client,
@@ -67,7 +67,7 @@ impl LlmCaller for RealLlmCaller {
         patched_request.extra = merged_extra;
 
         let (response, backend) =
-            casper_proxy::dispatch_with_retry(&self.http_client, &deployment, &patched_request)
+            casper_catalog::dispatch_with_retry(&self.http_client, &deployment, &patched_request)
                 .await?;
 
         Ok((response, Some(backend.id)))
@@ -92,7 +92,7 @@ impl LlmCaller for RealLlmCaller {
         patched_request.stream = true;
 
         let (response, backend) =
-            casper_proxy::dispatch_stream_with_retry(&self.http_client, &deployment, &patched_request, tx)
+            casper_catalog::dispatch_stream_with_retry(&self.http_client, &deployment, &patched_request, tx)
                 .await?;
 
         Ok((response, Some(backend.id)))

@@ -1,5 +1,5 @@
 use casper_base::{CasperError, TenantId};
-use casper_db::TenantDb;
+use casper_base::TenantDb;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ fn row_to_response(r: SecretKeyRow) -> SecretKeyResponse {
 pub async fn set(
     db: &PgPool,
     db_owner: &PgPool,
-    vault: &Arc<casper_vault::Vault>,
+    vault: &Arc<casper_base::Vault>,
     tenant_id: TenantId,
     req: &SetSecretRequest,
 ) -> Result<SecretKeyResponse, CasperError> {
@@ -95,7 +95,7 @@ pub async fn list(
 
 pub async fn delete(
     db_owner: &PgPool,
-    vault: &Arc<casper_vault::Vault>,
+    vault: &Arc<casper_base::Vault>,
     tenant_id: TenantId,
     key: &str,
 ) -> Result<serde_json::Value, CasperError> {

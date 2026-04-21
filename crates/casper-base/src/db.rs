@@ -1,4 +1,4 @@
-use casper_base::TenantId;
+use crate::TenantId;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Transaction};
 
@@ -35,7 +35,7 @@ impl DatabasePools {
 /// Usage:
 /// ```no_run
 /// # async fn example(pool: sqlx::PgPool) {
-/// let tenant_db = casper_db::TenantDb::new(pool, casper_base::TenantId::new());
+/// let tenant_db = casper_base::db::TenantDb::new(pool, casper_base::TenantId::new());
 /// let mut tx = tenant_db.begin().await.unwrap();
 /// // All queries on tx are now scoped to the tenant via RLS
 /// # }
@@ -100,13 +100,9 @@ mod tests {
             .await
             .unwrap();
 
-        // Use random UUIDs to avoid collision with application data
         let tenant_a = TenantId(Uuid::now_v7());
         let tenant_b = TenantId(Uuid::now_v7());
 
-        // Setup: create test tenants and users using the pool owner (bypasses RLS)
-        // We use a separate connection for setup that connects as the DB owner
-        // Use Unix socket peer auth for the DB owner (sysadm)
         let setup_url = std::env::var("DATABASE_URL_OWNER")
             .unwrap_or_else(|_| "postgres:///casper?host=/var/run/postgresql&user=sysadm".to_string());
         let setup_pool = PgPoolOptions::new()
@@ -115,7 +111,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Clean up first (order matters due to FK constraints)
         sqlx::query("DELETE FROM token_revocations WHERE tenant_id IN ($1, $2)")
             .bind(tenant_a.0)
             .bind(tenant_b.0)
@@ -133,9 +128,8 @@ mod tests {
             .bind(tenant_b.0)
             .execute(&setup_pool)
             .await
-            .ok(); // OK to fail if other FKs exist
+            .ok();
 
-        // Create tenants
         let slug_a = format!("test-a-{}", &tenant_a.0.to_string()[..8]);
         let slug_b = format!("test-b-{}", &tenant_b.0.to_string()[..8]);
         sqlx::query("INSERT INTO tenants (id, slug, display_name) VALUES ($1, $3, 'Test A'), ($2, $4, 'Test B')")
@@ -147,7 +141,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Create users
         sqlx::query("INSERT INTO tenant_users (id, tenant_id, subject, role, scopes, created_by) VALUES ($1, $2, 'user:a@test.com', 'admin', '{\"admin:*\"}', 'test')")
             .bind(Uuid::now_v7())
             .bind(tenant_a.0)
@@ -161,7 +154,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Test RLS: tenant A should only see their user
         let db_a = TenantDb::new(pool.clone(), tenant_a);
         let mut tx_a = db_a.begin().await.unwrap();
         let users_a: Vec<(String,)> =
@@ -173,7 +165,6 @@ mod tests {
         assert_eq!(users_a.len(), 1);
         assert_eq!(users_a[0].0, "user:a@test.com");
 
-        // Test RLS: tenant B should only see their user
         let db_b = TenantDb::new(pool.clone(), tenant_b);
         let mut tx_b = db_b.begin().await.unwrap();
         let users_b: Vec<(String,)> =
@@ -185,7 +176,6 @@ mod tests {
         assert_eq!(users_b.len(), 1);
         assert_eq!(users_b[0].0, "user:b@test.com");
 
-        // Cleanup
         sqlx::query("DELETE FROM tenant_users WHERE tenant_id IN ($1, $2)")
             .bind(tenant_a.0)
             .bind(tenant_b.0)
@@ -197,6 +187,6 @@ mod tests {
             .bind(tenant_b.0)
             .execute(&setup_pool)
             .await
-            .ok(); // May fail if other FK refs exist from prior test runs
+            .ok();
     }
 }

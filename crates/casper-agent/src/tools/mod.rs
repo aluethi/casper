@@ -301,7 +301,7 @@ pub async fn build_dispatcher(
                 }
             };
 
-            let client = Arc::new(casper_mcp::McpClient::new(
+            let client = Arc::new(crate::McpClient::new(
                 url,
                 api_key,
                 http_client.clone(),

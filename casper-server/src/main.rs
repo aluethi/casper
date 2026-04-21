@@ -8,9 +8,7 @@ pub mod ws;
 
 use std::sync::Arc;
 use axum::{Json, Router, extract::State, middleware, routing::get};
-use casper_auth::{JwtSigner, RevocationCache};
-use casper_base::JwtVerifier;
-use casper_observe::{AuditWriter, RuntimeMetrics, UsageRecorder};
+use casper_base::{JwtSigner, JwtVerifier, RevocationCache, AuditWriter, RuntimeMetrics, UsageRecorder};
 use dashmap::DashMap;
 use serde_json::json;
 use sqlx::PgPool;
@@ -36,7 +34,7 @@ pub struct AppState {
     pub jwt_signer: Option<Arc<JwtSigner>>,
     pub jwt_verifier: Option<Arc<JwtVerifier>>,
     pub revocation_cache: RevocationCache,
-    pub vault: Arc<casper_vault::Vault>,
+    pub vault: Arc<casper_base::Vault>,
     pub http_client: reqwest::Client,
     pub async_tasks: Arc<DashMap<Uuid, Option<serde_json::Value>>>,
     pub agent_registry: Arc<ws::AgentBackendRegistry>,
@@ -218,7 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::warn!("No master key configured — vault encryption disabled, using dev key");
             b"casper-dev-master-key-not-secure!".to_vec()
         };
-        Arc::new(casper_vault::Vault::new(master_key))
+        Arc::new(casper_base::Vault::new(master_key))
     };
 
     let cors = if config.listen.cors_origins.is_empty() {

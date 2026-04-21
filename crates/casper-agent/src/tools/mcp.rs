@@ -1,4 +1,4 @@
-//! MCP tool wrapper: bridges `casper_mcp::McpClient` into the agent `Tool` trait.
+//! MCP tool wrapper: bridges `crate::McpClient` into the agent `Tool` trait.
 //!
 //! Each MCP server may expose many tools. After discovery, each tool is wrapped
 //! in an `McpTool` struct and registered in the `ToolDispatcher` like any
@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use casper_base::CasperError;
-use casper_mcp::McpClient;
+use crate::McpClient;
 use serde_json::json;
 
 use super::{Tool, ToolContext, ToolResult};

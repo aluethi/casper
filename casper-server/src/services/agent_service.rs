@@ -1,6 +1,6 @@
 use casper_agent::prompt::assemble_system_prompt;
 use casper_base::{CasperError, TenantId};
-use casper_db::TenantDb;
+use casper_base::TenantDb;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;

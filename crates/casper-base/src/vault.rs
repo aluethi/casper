@@ -4,7 +4,7 @@ use aes_gcm::{
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use casper_base::{CasperError, SecretValue, TenantId};
+use crate::{CasperError, SecretValue, TenantId};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use sqlx::PgPool;
@@ -222,7 +222,6 @@ mod tests {
         let t1 = TenantId::new();
         let t2 = TenantId::new();
         let (ct, nonce) = vault.encrypt(t1, b"secret").unwrap();
-        // Decrypting with a different tenant key should fail
         assert!(vault.decrypt(t2, &ct, &nonce).is_err());
     }
 
@@ -237,8 +236,6 @@ mod tests {
 
     #[test]
     fn resolve_mcp_secret_validates_prefix() {
-        // Test that token_ref without "secret:" prefix is rejected.
-        // We can't call the full async method without a DB, so test the parsing logic directly.
         assert!("invalid_ref".strip_prefix("secret:").is_none());
         assert_eq!("secret:my_key".strip_prefix("secret:"), Some("my_key"));
     }

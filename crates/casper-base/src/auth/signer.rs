@@ -1,4 +1,4 @@
-use casper_base::{CasperClaims, CasperError, TenantId};
+use crate::{CasperClaims, CasperError, TenantId};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use uuid::Uuid;
 
@@ -71,7 +71,7 @@ impl JwtSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use casper_base::JwtVerifier;
+    use crate::JwtVerifier;
     use ring::signature::KeyPair;
 
     fn make_signer_and_verifier() -> (JwtSigner, JwtVerifier) {
@@ -111,7 +111,6 @@ mod tests {
         let claims = verifier.verify(&token).unwrap();
         assert_eq!(claims.role, "refresh");
         assert!(claims.scopes.is_empty());
-        // Refresh tokens are valid for 7 days
         assert!(claims.exp - claims.iat >= 604800);
     }
 }

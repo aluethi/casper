@@ -8,7 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use casper_base::CasperError;
-use casper_proxy::StreamEvent;
+use casper_catalog::StreamEvent;
 use serde::Deserialize;
 use futures::{stream::Stream, StreamExt};
 use uuid::Uuid;

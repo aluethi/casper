@@ -5,11 +5,7 @@ edition.workspace = true
 
 [dependencies]
 casper-base = { workspace = true }
-casper-db = { workspace = true }
 casper-catalog = { workspace = true }
-casper-proxy = { workspace = true }
-casper-mcp = { workspace = true }
-casper-observe = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
@@ -23,3 +19,8 @@ tokio-util = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"
 time = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
+url = { workspace = true }

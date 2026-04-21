@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::types::McpError;
+use super::types::McpError;
 
 // ── Metadata types ──────────────────────────────────────────────
 

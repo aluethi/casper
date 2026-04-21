@@ -61,7 +61,7 @@ pub struct UpdateProviderRequest {
 /// Create a new OAuth provider. Platform admin only.
 pub async fn create(
     db: &PgPool,
-    vault: &casper_vault::Vault,
+    vault: &casper_base::Vault,
     req: &CreateProviderRequest,
 ) -> Result<OAuthProviderResponse, CasperError> {
     let id = Uuid::now_v7();
@@ -135,7 +135,7 @@ pub async fn get_by_name(db: &PgPool, name: &str) -> Result<OAuthProviderRespons
 /// Update a provider.
 pub async fn update(
     db: &PgPool,
-    vault: &casper_vault::Vault,
+    vault: &casper_base::Vault,
     name: &str,
     req: &UpdateProviderRequest,
 ) -> Result<OAuthProviderResponse, CasperError> {
@@ -224,7 +224,7 @@ pub struct RegisterMcpRequest {
 /// probe → PRM → AS metadata → DCR → create provider.
 pub async fn register_mcp(
     db: &PgPool,
-    vault: &casper_vault::Vault,
+    vault: &casper_base::Vault,
     http_client: &reqwest::Client,
     redirect_uri: &str,
     req: &RegisterMcpRequest,
@@ -232,7 +232,7 @@ pub async fn register_mcp(
     let mcp_url = req.mcp_url.trim_end_matches('/');
 
     // Step 1-3: Discover PRM + AS metadata
-    let auth = casper_mcp::oauth::discover(http_client, mcp_url)
+    let auth = casper_agent::mcp::oauth::discover(http_client, mcp_url)
         .await
         .map_err(|e| CasperError::BadGateway(format!("MCP OAuth discovery failed: {e}")))?
         .ok_or_else(|| CasperError::BadRequest(
@@ -245,14 +245,14 @@ pub async fn register_mcp(
             "Authorization server does not support Dynamic Client Registration".into(),
         ))?;
 
-    let dcr = casper_mcp::oauth::register_client(
+    let dcr = casper_agent::mcp::oauth::register_client(
         http_client, reg_endpoint, redirect_uri, "Casper",
     )
     .await
     .map_err(|e| CasperError::BadGateway(format!("DCR failed: {e}")))?;
 
     // Derive provider name from MCP URL
-    let name = casper_mcp::oauth::mcp_provider_key(mcp_url);
+    let name = casper_agent::mcp::oauth::mcp_provider_key(mcp_url);
     let display_name = req.display_name.clone().unwrap_or_else(|| {
         url::Url::parse(mcp_url)
             .ok()
@@ -312,7 +312,7 @@ pub async fn register_mcp(
 /// Load a provider's full config including decrypted client_secret (for token exchange).
 pub async fn load_provider_with_secret(
     db: &PgPool,
-    vault: &casper_vault::Vault,
+    vault: &casper_base::Vault,
     name: &str,
 ) -> Result<ProviderConfig, CasperError> {
     let row: (String, String, Option<String>, String, String, String) = sqlx::query_as(

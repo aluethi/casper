@@ -1,8 +1,8 @@
 use casper_base::CasperError;
-use casper_catalog::{ResolvedBackend, ResolvedDeployment};
+use crate::{ResolvedBackend, ResolvedDeployment};
 use tokio::sync::mpsc;
 
-use crate::types::{LlmRequest, LlmResponse, StreamEvent};
+use super::types::{LlmRequest, LlmResponse, StreamEvent};
 
 /// Dispatch a single LLM request to a specific backend.
 /// Routes to the appropriate provider adapter based on `backend.provider`.
@@ -27,14 +27,12 @@ pub async fn dispatch(
         })?;
 
     match backend.provider.as_str() {
-        "anthropic" => crate::anthropic::call(client, base_url, api_key, request).await,
-        "azure_openai" => crate::openai::call_azure(client, base_url, api_key, request).await,
+        "anthropic" => super::anthropic::call(client, base_url, api_key, request).await,
+        "azure_openai" => super::openai::call_azure(client, base_url, api_key, request).await,
         "openai" | "openai_compatible" => {
-            crate::openai::call(client, base_url, api_key, request).await
+            super::openai::call(client, base_url, api_key, request).await
         }
         "agent" => {
-            // Agent backends are dispatched via WebSocket, not HTTP.
-            // The caller (inference route) must handle this before calling dispatch.
             Err(CasperError::Internal(
                 "agent backends must be dispatched via AgentBackendRegistry".into(),
             ))
@@ -46,11 +44,6 @@ pub async fn dispatch(
 }
 
 /// Dispatch with retry and fallback across the deployment's backend sequence.
-///
-/// For each backend in the sequence:
-///   - Retry up to `retry_attempts` times with exponential backoff
-///   - On final failure and `fallback_enabled`: try the next backend
-///   - If all backends exhausted: return 503
 pub async fn dispatch_with_retry<'a>(
     client: &reqwest::Client,
     deployment: &'a ResolvedDeployment,
@@ -68,7 +61,6 @@ pub async fn dispatch_with_retry<'a>(
 
         for attempt in 0..=deployment.retry_attempts {
             if attempt > 0 {
-                // Exponential backoff: base_ms * 2^(attempt-1)
                 let delay_ms =
                     deployment.retry_backoff_ms as u64 * (1u64 << (attempt as u64 - 1));
                 tracing::debug!(
@@ -99,7 +91,6 @@ pub async fn dispatch_with_retry<'a>(
                         "dispatch attempt failed"
                     );
 
-                    // Don't retry on client errors (bad request, auth issues from our side)
                     if is_non_retryable(&e) {
                         return Err(e);
                     }
@@ -109,8 +100,6 @@ pub async fn dispatch_with_retry<'a>(
             }
         }
 
-        // All retry attempts exhausted for this backend.
-        // If fallback is not enabled, stop here.
         if !deployment.fallback_enabled {
             break;
         }
@@ -121,7 +110,6 @@ pub async fn dispatch_with_retry<'a>(
         );
     }
 
-    // All backends exhausted
     Err(last_error.unwrap_or_else(|| {
         CasperError::Unavailable("all backends exhausted".into())
     }))
@@ -140,13 +128,12 @@ pub async fn dispatch_stream(
     })?;
 
     match backend.provider.as_str() {
-        "anthropic" => crate::anthropic::call_stream(client, base_url, api_key, request, tx).await,
-        "azure_openai" => crate::openai::call_stream_azure(client, base_url, api_key, request, tx).await,
+        "anthropic" => super::anthropic::call_stream(client, base_url, api_key, request, tx).await,
+        "azure_openai" => super::openai::call_stream_azure(client, base_url, api_key, request, tx).await,
         "openai" | "openai_compatible" => {
-            crate::openai::call_stream(client, base_url, api_key, request, tx).await
+            super::openai::call_stream(client, base_url, api_key, request, tx).await
         }
         "agent" => {
-            // Agent backends don't support streaming yet — fall back to non-streaming
             let response = dispatch(client, backend, request).await?;
             if !response.content.is_empty() {
                 let _ = tx.send(StreamEvent::ContentDelta { delta: response.content.clone() }).await;
@@ -158,12 +145,6 @@ pub async fn dispatch_stream(
 }
 
 /// Streaming dispatch with fallback.
-///
-/// Uses an inner channel per attempt: events are forwarded to the real `tx`
-/// only if the attempt succeeds. If the first backend fails before sending
-/// any events, we can safely try the next backend. If events were already
-/// forwarded (mid-stream failure), we propagate the error — you cannot
-/// un-send SSE events.
 pub async fn dispatch_stream_with_retry<'a>(
     client: &reqwest::Client,
     deployment: &'a ResolvedDeployment,
@@ -173,10 +154,8 @@ pub async fn dispatch_stream_with_retry<'a>(
     let mut last_error: Option<CasperError> = None;
 
     for backend in &deployment.backend_sequence {
-        // Inner channel to detect whether events were emitted before failure
         let (inner_tx, mut inner_rx) = mpsc::channel::<StreamEvent>(64);
 
-        // Spawn a forwarder: inner_rx → tx
         let outer_tx = tx.clone();
         let fwd_handle = tokio::spawn(async move {
             let mut count = 0u64;
@@ -189,16 +168,13 @@ pub async fn dispatch_stream_with_retry<'a>(
 
         match dispatch_stream(client, backend, request, inner_tx).await {
             Ok(response) => {
-                // Wait for forwarder to drain
                 let _ = fwd_handle.await;
                 return Ok((response, backend));
             }
             Err(e) => {
-                // Drop inner_tx (already moved into dispatch_stream), close forwarder
                 let events_sent = fwd_handle.await.unwrap_or(0);
 
                 if is_non_retryable(&e) || events_sent > 0 {
-                    // Can't retry — either client error or events already sent
                     return Err(e);
                 }
 

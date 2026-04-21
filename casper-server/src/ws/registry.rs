@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use casper_base::CasperError;
-use casper_observe::RuntimeMetrics;
-use casper_proxy::{LlmRequest, LlmResponse, MessageRole};
+use casper_base::RuntimeMetrics;
+use casper_catalog::{LlmRequest, LlmResponse, MessageRole};
 use dashmap::DashMap;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;

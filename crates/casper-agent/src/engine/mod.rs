@@ -3,7 +3,7 @@
 //! The engine:
 //! 1. Loads agent configuration from the database
 //! 2. Assembles the prompt (system blocks + conversation history)
-//! 3. Calls the LLM (via casper-catalog routing + casper-proxy dispatch)
+//! 3. Calls the LLM (via casper-catalog routing + dispatch)
 //! 4. If the LLM returns tool_use blocks: dispatches tools, appends results, loops
 //! 5. If the LLM returns end_turn: returns the final response
 //! 6. Enforces a maximum number of turns to prevent infinite loops
@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use casper_base::CasperError;
-use casper_observe::{AuditWriter, UsageRecorder};
-use casper_proxy::{LlmRequest, Message, MessageRole, StreamEvent};
+use casper_base::{AuditWriter, UsageRecorder};
+use casper_catalog::{LlmRequest, Message, MessageRole, StreamEvent};
 use serde_json::json;
 use sqlx::PgPool;
 use tokio::sync::mpsc;

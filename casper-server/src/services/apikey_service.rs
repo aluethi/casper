@@ -1,5 +1,5 @@
 use casper_base::{CasperError, TenantId};
-use casper_db::TenantDb;
+use casper_base::TenantDb;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;

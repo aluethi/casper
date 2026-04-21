@@ -1,4 +1,4 @@
-use casper_base::RevocationCheck;
+use crate::RevocationCheck;
 use sqlx::PgPool;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
@@ -81,7 +81,7 @@ impl RevocationCheck for RevocationCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use casper_base::RevocationCheck;
+    use crate::RevocationCheck;
 
     #[test]
     fn revocation_cache() {
@@ -104,20 +104,18 @@ mod tests {
             key_pair.public_key().as_ref().try_into().unwrap()
         };
 
-        let signer = crate::JwtSigner::from_pkcs8_der(pkcs8_bytes).unwrap();
-        let verifier = casper_base::JwtVerifier::from_public_key(&pub_bytes).unwrap();
+        let signer = super::super::JwtSigner::from_pkcs8_der(pkcs8_bytes).unwrap();
+        let verifier = crate::JwtVerifier::from_public_key(&pub_bytes).unwrap();
         let cache = RevocationCache::new();
 
-        let tid = casper_base::TenantId::new();
+        let tid = crate::TenantId::new();
         let (token, jti) = signer
             .sign_access_token(tid, "user:test@test.com", "admin", vec!["admin:*".to_string()])
             .unwrap();
 
-        // Before revocation: auth succeeds
         let ctx = verifier.authenticate(&token, &cache).unwrap();
         assert_eq!(ctx.token_id, jti);
 
-        // After revocation: auth fails
         cache.revoke(&jti);
         assert!(verifier.authenticate(&token, &cache).is_err());
     }

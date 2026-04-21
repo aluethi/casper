@@ -4,8 +4,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use casper_base::{CasperError, JwtVerifier, Scope, TenantContext};
-use casper_auth::RevocationCache;
+use casper_base::{CasperError, JwtVerifier, RevocationCache, Scope, TenantContext};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::sync::Arc;

@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use casper_base::CasperError;
-use casper_observe::UsageEvent;
-use casper_proxy::LlmResponse;
+use casper_base::UsageEvent;
+use casper_catalog::LlmResponse;
 use serde_json::json;
 use uuid::Uuid;
 

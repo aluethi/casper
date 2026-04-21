@@ -2,13 +2,7 @@
 resolver = "3"
 members = [
     "crates/casper-base",
-    "crates/casper-db",
-    "crates/casper-auth",
-    "crates/casper-vault",
-    "crates/casper-observe",
     "crates/casper-catalog",
-    "crates/casper-proxy",
-    "crates/casper-mcp",
     "crates/casper-agent",
     "casper-server",
     "casper-cli",
@@ -92,12 +86,6 @@ dirs = "6"
 
 # Workspace crates
 casper-base = { path = "crates/casper-base" }
-casper-db = { path = "crates/casper-db" }
-casper-auth = { path = "crates/casper-auth" }
-casper-vault = { path = "crates/casper-vault" }
-casper-observe = { path = "crates/casper-observe" }
 casper-catalog = { path = "crates/casper-catalog" }
-casper-proxy = { path = "crates/casper-proxy" }
-casper-mcp = { path = "crates/casper-mcp" }
 casper-agent = { path = "crates/casper-agent" }
 casper-wire = { path = "crates/casper-wire" }

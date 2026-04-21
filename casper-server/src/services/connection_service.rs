@@ -1,7 +1,7 @@
 //! Service layer for user connections (per-user OAuth tokens).
 
 use casper_base::{CasperError, TenantId};
-use casper_db::TenantDb;
+use casper_base::TenantDb;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -135,7 +135,7 @@ pub async fn list_available(
 /// Start the OAuth flow: generate PKCE, build authorization URL, return redirect.
 pub async fn start_oauth_flow(
     db: &PgPool,
-    vault: &casper_vault::Vault,
+    vault: &casper_base::Vault,
     http_client: &reqwest::Client,
     tenant_id: TenantId,
     user_subject: &str,
@@ -184,7 +184,7 @@ pub async fn start_oauth_flow(
 /// Provider name is derived from the encrypted state parameter, so no path param needed.
 pub async fn handle_callback(
     db: &PgPool,
-    vault: &casper_vault::Vault,
+    vault: &casper_base::Vault,
     http_client: &reqwest::Client,
     code: &str,
     state_param: &str,
@@ -275,7 +275,7 @@ pub async fn handle_callback(
 /// Disconnect: delete a user's connection to a provider.
 pub async fn disconnect(
     db: &PgPool,
-    vault: &casper_vault::Vault,
+    vault: &casper_base::Vault,
     http_client: &reqwest::Client,
     tenant_id: TenantId,
     user_subject: &str,
@@ -360,7 +360,7 @@ pub async fn list_all(
 /// Resolve a user's access token for a provider, auto-refreshing if expired.
 pub async fn resolve_user_token(
     db: &PgPool,
-    vault: &casper_vault::Vault,
+    vault: &casper_base::Vault,
     http_client: &reqwest::Client,
     tenant_id: TenantId,
     user_subject: &str,
