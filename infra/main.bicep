@@ -31,7 +31,7 @@ param frontDoorId string
 param adminUsername string = 'casperadmin'
 
 @description('VM size')
-param vmSize string = 'Standard_B2s'
+param vmSize string = 'Standard_B2as_v2'
 
 // ── Variables ───────────────────────────────────────────────────
 
