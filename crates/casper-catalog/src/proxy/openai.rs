@@ -3,7 +3,7 @@ use futures::StreamExt;
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use super::types::{LlmRequest, LlmResponse, MessageRole, StreamEvent};
+use crate::proxy::types::{LlmRequest, LlmResponse, MessageRole, StreamEvent};
 
 /// Whether to use Azure OpenAI's URL and auth format.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -412,7 +412,7 @@ async fn call_stream_with_variant(
 /// - Assistant messages with tool_calls: content has `tool_calls` + `content` fields
 /// - Tool result messages: content has `tool_call_id` + `content` fields
 /// - Everything else: passed through as {role, content}
-fn build_messages(messages: &[super::types::Message]) -> Vec<serde_json::Value> {
+fn build_messages(messages: &[crate::proxy::types::Message]) -> Vec<serde_json::Value> {
     messages
         .iter()
         .map(|msg| {
@@ -521,7 +521,7 @@ fn map_openai_error(status: u16, body: &str) -> CasperError {
 
 #[cfg(test)]
 mod tests {
-    use super::types::Message;
+    use crate::proxy::types::Message;
     use super::*;
 
     #[test]

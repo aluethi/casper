@@ -3,7 +3,7 @@ use futures::StreamExt;
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use super::types::{LlmRequest, LlmResponse, MessageRole, StreamEvent};
+use crate::proxy::types::{LlmRequest, LlmResponse, MessageRole, StreamEvent};
 
 /// Send a request to the Anthropic Messages API and parse the response.
 ///
@@ -355,7 +355,7 @@ pub async fn call_stream(
 /// Extracts system content (from messages or extra.system) and converts
 /// assistant tool_calls + tool results into Anthropic content blocks.
 fn build_anthropic_messages(
-    messages: &[super::types::Message],
+    messages: &[crate::proxy::types::Message],
     extra: &serde_json::Value,
 ) -> (Option<serde_json::Value>, Vec<serde_json::Value>) {
     let mut system: Option<serde_json::Value> = None;
@@ -552,11 +552,11 @@ mod tests {
     #[test]
     fn system_extracted_from_messages() {
         let messages = vec![
-            super::types::Message {
+            crate::proxy::types::Message {
                 role: MessageRole::System,
                 content: json!("You are a helpful assistant"),
             },
-            super::types::Message {
+            crate::proxy::types::Message {
                 role: MessageRole::User,
                 content: json!("Hello"),
             },
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn system_extracted_from_extra() {
-        let messages = vec![super::types::Message {
+        let messages = vec![crate::proxy::types::Message {
             role: MessageRole::User,
             content: json!("Hello"),
         }];
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn no_system() {
-        let messages = vec![super::types::Message {
+        let messages = vec![crate::proxy::types::Message {
             role: MessageRole::User,
             content: json!("Hello"),
         }];
@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn tool_calls_converted_to_anthropic() {
-        let messages = vec![super::types::Message {
+        let messages = vec![crate::proxy::types::Message {
             role: MessageRole::Assistant,
             content: json!({
                 "content": "Let me search.",
@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn tool_result_converted_to_anthropic() {
-        let messages = vec![super::types::Message {
+        let messages = vec![crate::proxy::types::Message {
             role: MessageRole::Tool,
             content: json!({
                 "tool_call_id": "call_1",
