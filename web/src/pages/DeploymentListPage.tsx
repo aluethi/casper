@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import api from '../lib/api'
-import type { Deployment, AvailableModel, AvailableBackend } from '../types'
+import type { Deployment, AvailableModel } from '../types'
 
 // ── Form state ──────────────────────────────────────────────────
 

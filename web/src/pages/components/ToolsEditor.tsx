@@ -127,11 +127,7 @@ export default function ToolsEditor({ builtinTools, setBuiltinTools, mcpServers,
         return
       }
 
-      // Check if a matching provider already exists
-      const existingMatch = oauthProviders.find(p => {
-        // Fetch the provider details to compare URLs — for now match by name heuristic
-        return false // we don't have authorization_url in the list response
-      })
+      // TODO: match by provider details once authorization_url is in the list response
 
       // Try to match by fetching each provider's details
       let matchedProvider: string | null = null
