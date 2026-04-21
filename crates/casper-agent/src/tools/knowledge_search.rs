@@ -31,8 +31,14 @@ impl KnowledgeSearchTool {
     /// Expected keys: `max_results` (int), `relevance_threshold` (float).
     pub fn from_config(config: &serde_json::Value) -> Self {
         Self {
-            max_results: config.get("max_results").and_then(|v| v.as_i64()).unwrap_or(5) as i32,
-            relevance_threshold: config.get("relevance_threshold").and_then(|v| v.as_f64()).unwrap_or(0.7),
+            max_results: config
+                .get("max_results")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(5) as i32,
+            relevance_threshold: config
+                .get("relevance_threshold")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.7),
         }
     }
 }

@@ -25,8 +25,12 @@ pub struct CreateBackendRequest {
     pub extra_config: serde_json::Value,
 }
 
-fn default_priority() -> i32 { 100 }
-fn default_json_obj() -> serde_json::Value { serde_json::json!({}) }
+fn default_priority() -> i32 {
+    100
+}
+fn default_json_obj() -> serde_json::Value {
+    serde_json::json!({})
+}
 
 #[derive(Deserialize)]
 pub struct UpdateBackendRequest {
@@ -88,8 +92,7 @@ fn row_to_response(r: BackendRow) -> BackendResponse {
     }
 }
 
-const BACKEND_COLUMNS: &str =
-    "id, name, provider, provider_label, base_url, \
+const BACKEND_COLUMNS: &str = "id, name, provider, provider_label, base_url, \
      region, priority, max_queue_depth, extra_config, is_active, created_at";
 
 // ── Backend-model assignment types ─────────────────────────────────
@@ -143,7 +146,9 @@ pub async fn create(
     .fetch_one(db)
     .await
     .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("platform_backends_name_key") => {
+        sqlx::Error::Database(ref db_err)
+            if db_err.constraint() == Some("platform_backends_name_key") =>
+        {
             CasperError::Conflict(format!("backend '{}' already exists", req.name))
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
@@ -184,10 +189,7 @@ pub async fn list(
     })
 }
 
-pub async fn get(
-    db: &PgPool,
-    id: Uuid,
-) -> Result<BackendResponse, CasperError> {
+pub async fn get(db: &PgPool, id: Uuid) -> Result<BackendResponse, CasperError> {
     let row: Option<BackendRow> = sqlx::query_as(&format!(
         "SELECT {BACKEND_COLUMNS} FROM platform_backends WHERE id = $1"
     ))
@@ -258,7 +260,7 @@ pub async fn assign_model(
         "INSERT INTO platform_backend_models (backend_id, model_id, priority)
          VALUES ($1, $2, $3)
          ON CONFLICT (backend_id, model_id) DO UPDATE SET priority = EXCLUDED.priority
-         RETURNING backend_id, model_id, priority"
+         RETURNING backend_id, model_id, priority",
     )
     .bind(req.backend_id)
     .bind(model_id)
@@ -282,7 +284,7 @@ pub async fn list_model_backends(
         "SELECT backend_id, model_id, priority
          FROM platform_backend_models
          WHERE model_id = $1
-         ORDER BY priority"
+         ORDER BY priority",
     )
     .bind(model_id)
     .fetch_all(db)
@@ -304,14 +306,13 @@ pub async fn remove_model_backend(
     model_id: Uuid,
     backend_id: Uuid,
 ) -> Result<serde_json::Value, CasperError> {
-    let result = sqlx::query(
-        "DELETE FROM platform_backend_models WHERE model_id = $1 AND backend_id = $2"
-    )
-    .bind(model_id)
-    .bind(backend_id)
-    .execute(db)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    let result =
+        sqlx::query("DELETE FROM platform_backend_models WHERE model_id = $1 AND backend_id = $2")
+            .bind(model_id)
+            .bind(backend_id)
+            .execute(db)
+            .await
+            .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     if result.rows_affected() == 0 {
         return Err(CasperError::NotFound(format!(

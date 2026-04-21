@@ -90,10 +90,7 @@ mod tests {
         let tool = DelegateTool;
         let ctx = super::super::tests_common::test_ctx();
         let result = tool
-            .execute(
-                json!({ "agent": "devops", "message": "deploy v1.2" }),
-                &ctx,
-            )
+            .execute(json!({ "agent": "devops", "message": "deploy v1.2" }), &ctx)
             .await
             .unwrap();
         assert!(!result.is_error);

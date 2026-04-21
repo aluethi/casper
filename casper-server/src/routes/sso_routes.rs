@@ -137,7 +137,8 @@ async fn get_sso(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("SSO config for tenant {tenant_id}")))?;
+    let r =
+        row.ok_or_else(|| CasperError::NotFound(format!("SSO config for tenant {tenant_id}")))?;
     Ok(Json(row_to_response(r)))
 }
 
@@ -172,7 +173,8 @@ async fn update_sso(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    let r = row.ok_or_else(|| CasperError::NotFound(format!("SSO config for tenant {tenant_id}")))?;
+    let r =
+        row.ok_or_else(|| CasperError::NotFound(format!("SSO config for tenant {tenant_id}")))?;
     Ok(Json(row_to_response(r)))
 }
 
@@ -191,13 +193,20 @@ async fn delete_sso(
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     if result.rows_affected() == 0 {
-        return Err(CasperError::NotFound(format!("SSO config for tenant {tenant_id}")));
+        return Err(CasperError::NotFound(format!(
+            "SSO config for tenant {tenant_id}"
+        )));
     }
 
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
 pub fn sso_router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/tenants/{id}/sso", post(create_sso).get(get_sso).patch(update_sso).delete(delete_sso))
+    Router::new().route(
+        "/api/v1/tenants/{id}/sso",
+        post(create_sso)
+            .get(get_sso)
+            .patch(update_sso)
+            .delete(delete_sso),
+    )
 }

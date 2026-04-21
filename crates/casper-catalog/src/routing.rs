@@ -34,17 +34,17 @@ pub struct ResolvedBackend {
 // ── Internal row types ────────────────────────────────────────────
 
 type DeploymentRow = (
-    Uuid,               // deployment id
-    Uuid,               // model_id
-    String,             // model name
-    String,             // slug
-    Vec<Uuid>,          // backend_sequence
-    i32,                // retry_attempts
-    i32,                // retry_backoff_ms
-    bool,               // fallback_enabled
-    i32,                // timeout_ms
-    serde_json::Value,  // default_params
-    Option<Uuid>,       // fallback_deployment_id
+    Uuid,              // deployment id
+    Uuid,              // model_id
+    String,            // model name
+    String,            // slug
+    Vec<Uuid>,         // backend_sequence
+    i32,               // retry_attempts
+    i32,               // retry_backoff_ms
+    bool,              // fallback_enabled
+    i32,               // timeout_ms
+    serde_json::Value, // default_params
+    Option<Uuid>,      // fallback_deployment_id
 );
 
 type BackendRow = (Uuid, String, String, Option<String>, Option<String>);
@@ -127,13 +127,15 @@ pub async fn resolve_deployment(
 
     let resolved_backends = backends
         .into_iter()
-        .map(|(id, name, provider, base_url, api_key_enc)| ResolvedBackend {
-            id,
-            name,
-            provider,
-            base_url,
-            api_key_enc,
-        })
+        .map(
+            |(id, name, provider, base_url, api_key_enc)| ResolvedBackend {
+                id,
+                name,
+                provider,
+                base_url,
+                api_key_enc,
+            },
+        )
         .collect();
 
     Ok(ResolvedDeployment {
@@ -183,7 +185,9 @@ pub async fn resolve_deployment_by_id(
         default_params,
         fallback_dep_id,
     ) = row.ok_or_else(|| {
-        CasperError::NotFound(format!("fallback deployment '{deployment_id}' not found or inactive"))
+        CasperError::NotFound(format!(
+            "fallback deployment '{deployment_id}' not found or inactive"
+        ))
     })?;
 
     let backends: Vec<BackendRow> = if backend_sequence_ids.is_empty() {
@@ -214,9 +218,15 @@ pub async fn resolve_deployment_by_id(
 
     let resolved_backends = backends
         .into_iter()
-        .map(|(id, name, provider, base_url, api_key_enc)| ResolvedBackend {
-            id, name, provider, base_url, api_key_enc,
-        })
+        .map(
+            |(id, name, provider, base_url, api_key_enc)| ResolvedBackend {
+                id,
+                name,
+                provider,
+                base_url,
+                api_key_enc,
+            },
+        )
         .collect();
 
     Ok(ResolvedDeployment {

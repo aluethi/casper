@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -94,10 +94,7 @@ async fn export_agent(
     let (yaml, agent_name) = agent_service::export_yaml(&state.db, tenant_id, &name).await?;
 
     let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        "application/x-yaml".parse().unwrap(),
-    );
+    headers.insert(header::CONTENT_TYPE, "application/x-yaml".parse().unwrap());
     headers.insert(
         header::CONTENT_DISPOSITION,
         format!("attachment; filename=\"{}.yaml\"", agent_name)

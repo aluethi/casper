@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::auth::ScopeGuard;
 use crate::helpers::to_rfc3339;
-use crate::pagination::{PaginationParams, PaginatedResponse, Pagination};
+use crate::pagination::{PaginatedResponse, Pagination, PaginationParams};
 
 #[derive(sqlx::FromRow)]
 struct TenantRow {
@@ -84,22 +84,22 @@ async fn create_tenant(
 
     // Create tenant
     let row: TenantRow = sqlx::query_as(
-            "INSERT INTO tenants (id, slug, display_name, settings)
+        "INSERT INTO tenants (id, slug, display_name, settings)
              VALUES ($1, $2, $3, $4)
-             RETURNING id, slug, display_name, status, settings, created_at, updated_at"
-        )
-        .bind(tenant_id)
-        .bind(&body.slug)
-        .bind(&body.display_name)
-        .bind(&settings)
-        .fetch_one(&state.db_owner)
-        .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("tenants_slug_key") => {
-                CasperError::Conflict(format!("tenant slug '{}' already exists", body.slug))
-            }
-            _ => CasperError::Internal(format!("DB error: {e}")),
-        })?;
+             RETURNING id, slug, display_name, status, settings, created_at, updated_at",
+    )
+    .bind(tenant_id)
+    .bind(&body.slug)
+    .bind(&body.display_name)
+    .bind(&settings)
+    .fetch_one(&state.db_owner)
+    .await
+    .map_err(|e| match e {
+        sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("tenants_slug_key") => {
+            CasperError::Conflict(format!("tenant slug '{}' already exists", body.slug))
+        }
+        _ => CasperError::Internal(format!("DB error: {e}")),
+    })?;
 
     // Create owner user
     let subject = format!("user:{}", body.owner_email);
@@ -120,7 +120,7 @@ async fn create_tenant(
     // Initialize tenant memory
     sqlx::query(
         "INSERT INTO tenant_memory (tenant_id, content, updated_by) VALUES ($1, '', $2)
-         ON CONFLICT DO NOTHING"
+         ON CONFLICT DO NOTHING",
     )
     .bind(tenant_id)
     .bind(guard.0.actor())
@@ -147,14 +147,14 @@ async fn list_tenants(
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<TenantRow> = sqlx::query_as(
-            "SELECT id, slug, display_name, status, settings, created_at, updated_at
-             FROM tenants ORDER BY created_at DESC LIMIT $1 OFFSET $2"
-        )
-        .bind(params.limit())
-        .bind(offset)
-        .fetch_all(&state.db_owner)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+        "SELECT id, slug, display_name, status, settings, created_at, updated_at
+             FROM tenants ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+    )
+    .bind(params.limit())
+    .bind(offset)
+    .fetch_all(&state.db_owner)
+    .await
+    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
 
@@ -177,13 +177,13 @@ async fn get_tenant(
     guard.require("platform:admin")?;
 
     let row: Option<TenantRow> = sqlx::query_as(
-            "SELECT id, slug, display_name, status, settings, created_at, updated_at
-             FROM tenants WHERE id = $1"
-        )
-        .bind(id)
-        .fetch_optional(&state.db_owner)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+        "SELECT id, slug, display_name, status, settings, created_at, updated_at
+             FROM tenants WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_owner)
+    .await
+    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("tenant {id}")))?;
     Ok(Json(row_to_response(r)))
@@ -199,21 +199,21 @@ async fn update_tenant(
     guard.require("platform:admin")?;
 
     let row: Option<TenantRow> = sqlx::query_as(
-            "UPDATE tenants SET
+        "UPDATE tenants SET
                 display_name = COALESCE($2, display_name),
                 status = COALESCE($3, status),
                 settings = COALESCE($4, settings),
                 updated_at = now()
              WHERE id = $1
-             RETURNING id, slug, display_name, status, settings, created_at, updated_at"
-        )
-        .bind(id)
-        .bind(&body.display_name)
-        .bind(&body.status)
-        .bind(&body.settings)
-        .fetch_optional(&state.db_owner)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+             RETURNING id, slug, display_name, status, settings, created_at, updated_at",
+    )
+    .bind(id)
+    .bind(&body.display_name)
+    .bind(&body.status)
+    .bind(&body.settings)
+    .fetch_optional(&state.db_owner)
+    .await
+    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let r = row.ok_or_else(|| CasperError::NotFound(format!("tenant {id}")))?;
     Ok(Json(row_to_response(r)))

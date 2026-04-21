@@ -1,8 +1,4 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    routing::get,
-};
+use axum::{Json, Router, extract::State, routing::get};
 use casper_base::CasperError;
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -102,7 +98,7 @@ async fn list_catalog(
          FROM models m
          LEFT JOIN model_quotas mq ON mq.model_id = m.id AND mq.tenant_id = $1
          WHERE m.published = true AND m.is_active = true
-         ORDER BY m.provider, m.name"
+         ORDER BY m.provider, m.name",
     )
     .bind(tenant_id)
     .fetch_all(&state.db_owner)
@@ -116,6 +112,5 @@ async fn list_catalog(
 // ── Router ─────────────────────────────────────────────────────────
 
 pub fn catalog_router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/catalog", get(list_catalog))
+    Router::new().route("/api/v1/catalog", get(list_catalog))
 }

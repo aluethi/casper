@@ -93,7 +93,8 @@ async fn remove_backend_assignment(
     Path((model_id, backend_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, CasperError> {
     guard.require("platform:admin")?;
-    let result = backend_service::remove_model_backend(&state.db_owner, model_id, backend_id).await?;
+    let result =
+        backend_service::remove_model_backend(&state.db_owner, model_id, backend_id).await?;
     Ok(Json(result))
 }
 
@@ -102,8 +103,14 @@ async fn remove_backend_assignment(
 pub fn backend_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/backends", post(create_backend).get(list_backends))
-        .route("/api/v1/backends/{id}", get(get_backend).patch(update_backend))
-        .route("/api/v1/models/{id}/backends", post(assign_backend).get(list_model_backends))
+        .route(
+            "/api/v1/backends/{id}",
+            get(get_backend).patch(update_backend),
+        )
+        .route(
+            "/api/v1/models/{id}/backends",
+            post(assign_backend).get(list_model_backends),
+        )
         .route(
             "/api/v1/models/{model_id}/backends/{backend_id}",
             axum::routing::delete(remove_backend_assignment),

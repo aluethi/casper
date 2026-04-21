@@ -79,5 +79,10 @@ async fn delete_snippet(
 pub fn snippet_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/snippets", post(create_snippet).get(list_snippets))
-        .route("/api/v1/snippets/{id}", get(get_snippet).patch(update_snippet).delete(delete_snippet))
+        .route(
+            "/api/v1/snippets/{id}",
+            get(get_snippet)
+                .patch(update_snippet)
+                .delete(delete_snippet),
+        )
 }

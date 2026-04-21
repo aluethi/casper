@@ -23,7 +23,11 @@ impl McpClient {
     /// - `url`: Base URL of the MCP server (e.g. `http://localhost:8080/mcp`).
     /// - `auth_token`: Optional bearer token for authentication.
     /// - `http_client`: A shared `reqwest::Client` instance.
-    pub fn new(url: impl Into<String>, auth_token: Option<String>, http_client: reqwest::Client) -> Self {
+    pub fn new(
+        url: impl Into<String>,
+        auth_token: Option<String>,
+        http_client: reqwest::Client,
+    ) -> Self {
         Self {
             url: url.into(),
             auth_token,
@@ -129,7 +133,9 @@ impl McpClient {
             "arguments": input,
         });
 
-        let response = self.rpc_call_with_auth("tools/call", params, auth_override).await?;
+        let response = self
+            .rpc_call_with_auth("tools/call", params, auth_override)
+            .await?;
         debug!(tool = name, "MCP tool call completed");
         Ok(response)
     }
@@ -189,9 +195,9 @@ impl McpClient {
             });
         }
 
-        rpc_resp
-            .result
-            .ok_or_else(|| McpError::InvalidResponse("response has neither result nor error".into()))
+        rpc_resp.result.ok_or_else(|| {
+            McpError::InvalidResponse("response has neither result nor error".into())
+        })
     }
 }
 
@@ -212,11 +218,7 @@ mod tests {
 
     #[test]
     fn client_without_token() {
-        let client = McpClient::new(
-            "http://mcp.example.com",
-            None,
-            reqwest::Client::new(),
-        );
+        let client = McpClient::new("http://mcp.example.com", None, reqwest::Client::new());
         assert_eq!(client.url(), "http://mcp.example.com");
         assert!(client.auth_token.is_none());
     }

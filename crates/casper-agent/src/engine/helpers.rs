@@ -36,25 +36,32 @@ impl AgentEngine {
         .await
         .map_err(|e| CasperError::Internal(format!("DB error loading agent config: {e}")))?;
 
-        let (deployment_slug, description, prompt_stack, tools, config) =
-            row.ok_or_else(|| {
-                CasperError::NotFound(format!("agent '{agent_name}' not found or inactive"))
-            })?;
+        let (deployment_slug, description, prompt_stack, tools, config) = row.ok_or_else(|| {
+            CasperError::NotFound(format!("agent '{agent_name}' not found or inactive"))
+        })?;
 
-        let max_turns = config.get("max_turns").and_then(|v| v.as_i64()).unwrap_or(DEFAULT_MAX_TURNS as i64) as i32;
-        let max_tokens = config.get("max_tokens").and_then(|v| v.as_i64()).unwrap_or(8192) as i32;
-        let temperature = config.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7);
+        let max_turns = config
+            .get("max_turns")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(DEFAULT_MAX_TURNS as i64) as i32;
+        let max_tokens = config
+            .get("max_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(8192) as i32;
+        let temperature = config
+            .get("temperature")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.7);
 
         // Look up tenant display name (never expose raw UUID in the prompt)
-        let tenant_name: String = sqlx::query_scalar(
-            "SELECT display_name FROM tenants WHERE id = $1"
-        )
-        .bind(tenant_id)
-        .fetch_optional(&self.db)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "Unknown".to_string());
+        let tenant_name: String =
+            sqlx::query_scalar("SELECT display_name FROM tenants WHERE id = $1")
+                .bind(tenant_id)
+                .fetch_optional(&self.db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Unknown".to_string());
 
         Ok(AgentConfig {
             deployment_slug,
@@ -236,12 +243,10 @@ impl AgentEngine {
         .await;
 
         // Mark the ephemeral conversation as completed
-        let _ = sqlx::query(
-            "UPDATE conversations SET status = 'completed' WHERE id = $1",
-        )
-        .bind(child_conv_id)
-        .execute(&self.db)
-        .await;
+        let _ = sqlx::query("UPDATE conversations SET status = 'completed' WHERE id = $1")
+            .bind(child_conv_id)
+            .execute(&self.db)
+            .await;
 
         match result {
             Ok(Ok(response)) => {
@@ -261,9 +266,7 @@ impl AgentEngine {
                     error = %e,
                     "delegation failed"
                 );
-                ToolResult::error(format!(
-                    "Agent '{target_owned}' failed: {e}"
-                ))
+                ToolResult::error(format!("Agent '{target_owned}' failed: {e}"))
             }
             Err(_) => {
                 tracing::warn!(

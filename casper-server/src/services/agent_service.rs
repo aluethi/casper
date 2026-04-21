@@ -1,6 +1,6 @@
 use casper_agent::prompt::assemble_system_prompt;
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -475,15 +475,13 @@ pub async fn preview_prompt(
     let (agent_name, description, prompt_stack, tools) =
         row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
 
-    let tenant_name: String = sqlx::query_scalar(
-        "SELECT display_name FROM tenants WHERE id = $1",
-    )
-    .bind(tenant_id.0)
-    .fetch_optional(db)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "Unknown".to_string());
+    let tenant_name: String = sqlx::query_scalar("SELECT display_name FROM tenants WHERE id = $1")
+        .bind(tenant_id.0)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "Unknown".to_string());
 
     // Discover MCP tools so the preview includes their documentation
     let dispatcher = casper_agent::tools::build_dispatcher(&tools, http_client).await;

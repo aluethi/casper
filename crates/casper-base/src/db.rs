@@ -63,9 +63,7 @@ impl TenantDb {
 
     /// Acquire a connection and set the tenant context.
     /// Returns an owned connection from the pool.
-    pub async fn acquire(
-        &self,
-    ) -> Result<sqlx::pool::PoolConnection<Postgres>, sqlx::Error> {
+    pub async fn acquire(&self) -> Result<sqlx::pool::PoolConnection<Postgres>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
         sqlx::query("SELECT set_config('app.tenant_id', $1::text, true)")
             .bind(self.tenant_id.0.to_string())
@@ -88,7 +86,10 @@ mod tests {
     #[tokio::test]
     async fn database_pools_connect() {
         let pools = DatabasePools::connect(&test_db_url(), 2, 1).await.unwrap();
-        let row: (i32,) = sqlx::query_as("SELECT 1").fetch_one(&pools.main).await.unwrap();
+        let row: (i32,) = sqlx::query_as("SELECT 1")
+            .fetch_one(&pools.main)
+            .await
+            .unwrap();
         assert_eq!(row.0, 1);
     }
 
@@ -103,8 +104,9 @@ mod tests {
         let tenant_a = TenantId(Uuid::now_v7());
         let tenant_b = TenantId(Uuid::now_v7());
 
-        let setup_url = std::env::var("DATABASE_URL_OWNER")
-            .unwrap_or_else(|_| "postgres:///casper?host=/var/run/postgresql&user=sysadm".to_string());
+        let setup_url = std::env::var("DATABASE_URL_OWNER").unwrap_or_else(|_| {
+            "postgres:///casper?host=/var/run/postgresql&user=sysadm".to_string()
+        });
         let setup_pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&setup_url)
@@ -156,22 +158,20 @@ mod tests {
 
         let db_a = TenantDb::new(pool.clone(), tenant_a);
         let mut tx_a = db_a.begin().await.unwrap();
-        let users_a: Vec<(String,)> =
-            sqlx::query_as("SELECT subject FROM tenant_users")
-                .fetch_all(&mut *tx_a)
-                .await
-                .unwrap();
+        let users_a: Vec<(String,)> = sqlx::query_as("SELECT subject FROM tenant_users")
+            .fetch_all(&mut *tx_a)
+            .await
+            .unwrap();
         tx_a.commit().await.unwrap();
         assert_eq!(users_a.len(), 1);
         assert_eq!(users_a[0].0, "user:a@test.com");
 
         let db_b = TenantDb::new(pool.clone(), tenant_b);
         let mut tx_b = db_b.begin().await.unwrap();
-        let users_b: Vec<(String,)> =
-            sqlx::query_as("SELECT subject FROM tenant_users")
-                .fetch_all(&mut *tx_b)
-                .await
-                .unwrap();
+        let users_b: Vec<(String,)> = sqlx::query_as("SELECT subject FROM tenant_users")
+            .fetch_all(&mut *tx_b)
+            .await
+            .unwrap();
         tx_b.commit().await.unwrap();
         assert_eq!(users_b.len(), 1);
         assert_eq!(users_b[0].0, "user:b@test.com");

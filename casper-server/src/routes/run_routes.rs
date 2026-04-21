@@ -4,20 +4,21 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, sse::{Event, KeepAlive, Sse}},
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
 use casper_base::CasperError;
 use casper_catalog::StreamEvent;
+use futures::{StreamExt, stream::Stream};
 use serde::Deserialize;
-use futures::{stream::Stream, StreamExt};
 use uuid::Uuid;
 
 use crate::AppState;
 use crate::auth::ScopeGuard;
-use crate::services::run_service::{
-    self, AsyncAccepted, RunRequest, TaskStatusResponse,
-};
+use crate::services::run_service::{self, AsyncAccepted, RunRequest, TaskStatusResponse};
 
 // ── Handlers ────────────────────────────────────────────────────
 
@@ -117,8 +118,13 @@ async fn run_agent_stream(
     let actor = guard.0.actor();
 
     let conversation_id = run_service::prepare_conversation(
-        &state.db, tenant_id, &name, body.conversation_id, &body.message,
-    ).await?;
+        &state.db,
+        tenant_id,
+        &name,
+        body.conversation_id,
+        &body.message,
+    )
+    .await?;
 
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
     // Channel for user responses to ask_user questions
@@ -143,17 +149,24 @@ async fn run_agent_stream(
             Some(state_clone.usage.clone()),
         );
 
-        if let Err(e) = engine.run_stream(
-            tenant_id.0,
-            &name_clone,
-            conversation_id,
-            &message,
-            &actor_clone,
-            &metadata,
-            tx.clone(),
-            ask_rx,
-        ).await {
-            let _ = tx.send(StreamEvent::Error { message: e.to_string() }).await;
+        if let Err(e) = engine
+            .run_stream(
+                tenant_id.0,
+                &name_clone,
+                conversation_id,
+                &message,
+                &actor_clone,
+                &metadata,
+                tx.clone(),
+                ask_rx,
+            )
+            .await
+        {
+            let _ = tx
+                .send(StreamEvent::Error {
+                    message: e.to_string(),
+                })
+                .await;
         }
         // Clean up the pending_asks entry
         state_clone.pending_asks.remove(&conversation_id);
@@ -191,12 +204,14 @@ async fn respond_to_ask(
     _guard: ScopeGuard,
     Json(body): Json<RespondRequest>,
 ) -> Result<Json<serde_json::Value>, CasperError> {
-    let sender = state.pending_asks.get(&body.conversation_id)
-        .ok_or_else(|| CasperError::NotFound(
-            "no pending question for this conversation".into()
-        ))?;
+    let sender = state
+        .pending_asks
+        .get(&body.conversation_id)
+        .ok_or_else(|| CasperError::NotFound("no pending question for this conversation".into()))?;
 
-    sender.send(body.answer).await
+    sender
+        .send(body.answer)
+        .await
         .map_err(|_| CasperError::Internal("engine is no longer waiting for input".into()))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))

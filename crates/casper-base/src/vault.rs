@@ -1,10 +1,7 @@
-use aes_gcm::{
-    Aes256Gcm, KeyInit, Nonce,
-    aead::Aead,
-};
+use crate::{CasperError, SecretValue, TenantId};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use crate::{CasperError, SecretValue, TenantId};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use sqlx::PgPool;
@@ -32,7 +29,11 @@ impl Vault {
     }
 
     /// Encrypt a value for a specific tenant.
-    fn encrypt(&self, tenant_id: TenantId, plaintext: &[u8]) -> Result<(String, String), CasperError> {
+    fn encrypt(
+        &self,
+        tenant_id: TenantId,
+        plaintext: &[u8],
+    ) -> Result<(String, String), CasperError> {
         let key = self.derive_key(tenant_id);
         let cipher = Aes256Gcm::new_from_slice(&key)
             .map_err(|e| CasperError::Internal(format!("cipher init failed: {e}")))?;
@@ -89,7 +90,7 @@ impl Vault {
              ON CONFLICT (tenant_id, key) DO UPDATE
              SET ciphertext_b64 = EXCLUDED.ciphertext_b64,
                  nonce_b64 = EXCLUDED.nonce_b64,
-                 updated_at = now()"
+                 updated_at = now()",
         )
         .bind(Uuid::now_v7())
         .bind(tenant_id.0)
@@ -112,7 +113,7 @@ impl Vault {
     ) -> Result<SecretValue, CasperError> {
         let row: (String, String) = sqlx::query_as(
             "SELECT ciphertext_b64, nonce_b64 FROM tenant_secrets
-             WHERE tenant_id = $1 AND key = $2"
+             WHERE tenant_id = $1 AND key = $2",
         )
         .bind(tenant_id.0)
         .bind(key)
@@ -131,14 +132,12 @@ impl Vault {
         tenant_id: TenantId,
         key: &str,
     ) -> Result<bool, CasperError> {
-        let result = sqlx::query(
-            "DELETE FROM tenant_secrets WHERE tenant_id = $1 AND key = $2"
-        )
-        .bind(tenant_id.0)
-        .bind(key)
-        .execute(pool)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB delete failed: {e}")))?;
+        let result = sqlx::query("DELETE FROM tenant_secrets WHERE tenant_id = $1 AND key = $2")
+            .bind(tenant_id.0)
+            .bind(key)
+            .execute(pool)
+            .await
+            .map_err(|e| CasperError::Internal(format!("DB delete failed: {e}")))?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -149,13 +148,12 @@ impl Vault {
         pool: &PgPool,
         tenant_id: TenantId,
     ) -> Result<Vec<String>, CasperError> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT key FROM tenant_secrets WHERE tenant_id = $1 ORDER BY key"
-        )
-        .bind(tenant_id.0)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| CasperError::Internal(format!("DB read failed: {e}")))?;
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT key FROM tenant_secrets WHERE tenant_id = $1 ORDER BY key")
+                .bind(tenant_id.0)
+                .fetch_all(pool)
+                .await
+                .map_err(|e| CasperError::Internal(format!("DB read failed: {e}")))?;
 
         Ok(rows.into_iter().map(|(k,)| k).collect())
     }
@@ -168,11 +166,11 @@ impl Vault {
         tenant_id: TenantId,
         token_ref: &str,
     ) -> Result<SecretValue, CasperError> {
-        let key = token_ref
-            .strip_prefix("secret:")
-            .ok_or_else(|| CasperError::BadRequest(format!(
+        let key = token_ref.strip_prefix("secret:").ok_or_else(|| {
+            CasperError::BadRequest(format!(
                 "invalid token_ref format: {token_ref} (expected 'secret:key_name')"
-            )))?;
+            ))
+        })?;
         self.get(pool, tenant_id, key).await
     }
 

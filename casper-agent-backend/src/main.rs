@@ -62,10 +62,16 @@ impl SidecarConfig {
         let mut all = self.backends.clone();
         if let Some(k) = &self.key {
             if !all.iter().any(|b| b.key == *k) {
-                all.insert(0, BackendEntry {
-                    key: k.clone(),
-                    inference_url: self.inference_url.clone().unwrap_or_else(default_inference_url),
-                });
+                all.insert(
+                    0,
+                    BackendEntry {
+                        key: k.clone(),
+                        inference_url: self
+                            .inference_url
+                            .clone()
+                            .unwrap_or_else(default_inference_url),
+                    },
+                );
             }
         }
         all
@@ -88,7 +94,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let backends = config.all_backends();
     if backends.is_empty() {
-        return Err("no backends configured (set `key` + `inference_url` or `backends` list)".into());
+        return Err(
+            "no backends configured (set `key` + `inference_url` or `backends` list)".into(),
+        );
     }
 
     tracing::info!(
@@ -106,7 +114,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for entry in backends {
         let casper_url = config.casper_url.clone();
         let client = http_client.clone();
-        let prefix = if entry.key.len() >= 12 { &entry.key[..12] } else { &entry.key };
+        let prefix = if entry.key.len() >= 12 {
+            &entry.key[..12]
+        } else {
+            &entry.key
+        };
         tracing::info!(key_prefix = %prefix, inference_url = %entry.inference_url, "spawning backend connection");
 
         handles.push(tokio::spawn(async move {

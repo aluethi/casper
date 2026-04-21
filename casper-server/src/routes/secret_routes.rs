@@ -19,7 +19,8 @@ async fn set_secret(
 ) -> Result<Json<SecretKeyResponse>, CasperError> {
     guard.require("secrets:write")?;
     let tenant_id = TenantId(guard.0.tenant_id.0);
-    let result = secret_service::set(&state.db, &state.db_owner, &state.vault, tenant_id, &body).await?;
+    let result =
+        secret_service::set(&state.db, &state.db_owner, &state.vault, tenant_id, &body).await?;
     Ok(Json(result))
 }
 
@@ -51,5 +52,8 @@ async fn delete_secret(
 pub fn secret_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/secrets", post(set_secret).get(list_secrets))
-        .route("/api/v1/secrets/{key}", axum::routing::delete(delete_secret))
+        .route(
+            "/api/v1/secrets/{key}",
+            axum::routing::delete(delete_secret),
+        )
 }

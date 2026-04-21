@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::Serialize;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -389,14 +389,13 @@ pub async fn delete_document(
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Get file path before deleting
-    let file_path: Option<(String,)> = sqlx::query_as(
-        "SELECT file_path FROM documents WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(id)
-    .bind(tenant_id.0)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    let file_path: Option<(String,)> =
+        sqlx::query_as("SELECT file_path FROM documents WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id.0)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let file_path = file_path.ok_or_else(|| CasperError::NotFound(format!("document {id}")))?;
 

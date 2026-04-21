@@ -4,5 +4,7 @@ pub mod dispatch;
 pub mod openai;
 pub mod types;
 
-pub use dispatch::{dispatch, dispatch_with_retry, dispatch_stream, dispatch_stream_with_retry, is_non_retryable};
+pub use dispatch::{
+    dispatch, dispatch_stream, dispatch_stream_with_retry, dispatch_with_retry, is_non_retryable,
+};
 pub use types::{LlmRequest, LlmResponse, Message, MessageRole, StreamEvent};

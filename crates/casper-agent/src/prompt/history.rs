@@ -37,7 +37,7 @@ pub async fn load_conversation_history(
         "SELECT role, content, token_count
          FROM messages
          WHERE tenant_id = $1 AND conversation_id = $2
-         ORDER BY created_at DESC"
+         ORDER BY created_at DESC",
     )
     .bind(tenant_id)
     .bind(conversation_id)
@@ -94,9 +94,8 @@ impl Turn {
 /// Returns true if a content value contains tool_use blocks.
 fn has_tool_use(content: &serde_json::Value) -> bool {
     if let Some(arr) = content.as_array() {
-        arr.iter().any(|block| {
-            block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
-        })
+        arr.iter()
+            .any(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
     } else {
         false
     }
@@ -114,7 +113,9 @@ fn group_into_turns(rows: Vec<MessageRow>) -> Vec<Turn> {
     let mut pending_tool_results: Vec<HistoryMessage> = Vec::new();
 
     for row in rows {
-        let token_count = row.token_count.unwrap_or_else(|| estimate_tokens_json(&row.content));
+        let token_count = row
+            .token_count
+            .unwrap_or_else(|| estimate_tokens_json(&row.content));
 
         let msg = HistoryMessage {
             role: row.role.clone(),
@@ -136,22 +137,30 @@ fn group_into_turns(rows: Vec<MessageRow>) -> Vec<Turn> {
             // tool_results are in reverse chronological order, reverse them
             pending_tool_results.reverse();
             turn_messages.append(&mut pending_tool_results);
-            turns.push(Turn { messages: turn_messages });
+            turns.push(Turn {
+                messages: turn_messages,
+            });
         } else {
             // If there are orphaned tool_results (shouldn't happen normally),
             // flush them as their own turn to avoid losing data.
             if !pending_tool_results.is_empty() {
                 pending_tool_results.reverse();
-                turns.push(Turn { messages: std::mem::take(&mut pending_tool_results) });
+                turns.push(Turn {
+                    messages: std::mem::take(&mut pending_tool_results),
+                });
             }
-            turns.push(Turn { messages: vec![msg] });
+            turns.push(Turn {
+                messages: vec![msg],
+            });
         }
     }
 
     // Flush any remaining tool_results
     if !pending_tool_results.is_empty() {
         pending_tool_results.reverse();
-        turns.push(Turn { messages: pending_tool_results });
+        turns.push(Turn {
+            messages: pending_tool_results,
+        });
     }
 
     turns
@@ -190,8 +199,16 @@ mod tests {
     fn group_tool_use_pairs() {
         // Newest first: tool_result, assistant(tool_use), user
         let rows = vec![
-            make_msg("tool", json!({"type": "tool_result", "content": "result"}), 20),
-            make_msg("assistant", json!([{"type": "tool_use", "name": "search", "input": {}}]), 15),
+            make_msg(
+                "tool",
+                json!({"type": "tool_result", "content": "result"}),
+                20,
+            ),
+            make_msg(
+                "assistant",
+                json!([{"type": "tool_use", "name": "search", "input": {}}]),
+                15,
+            ),
             make_msg("user", json!("Search for something"), 10),
         ];
 
@@ -211,10 +228,14 @@ mod tests {
         let rows = vec![
             make_msg("tool", json!({"content": "result2"}), 10),
             make_msg("tool", json!({"content": "result1"}), 10),
-            make_msg("assistant", json!([
-                {"type": "tool_use", "name": "tool1", "input": {}},
-                {"type": "tool_use", "name": "tool2", "input": {}}
-            ]), 20),
+            make_msg(
+                "assistant",
+                json!([
+                    {"type": "tool_use", "name": "tool1", "input": {}},
+                    {"type": "tool_use", "name": "tool2", "input": {}}
+                ]),
+                20,
+            ),
             make_msg("user", json!("Do two things"), 5),
         ];
 
@@ -231,7 +252,11 @@ mod tests {
         // Newest first: tool_result(20 tokens), assistant_tool_use(15), user(5), assistant(10), user(5)
         let rows = vec![
             make_msg("tool", json!({"content": "result"}), 20),
-            make_msg("assistant", json!([{"type": "tool_use", "name": "t", "input": {}}]), 15),
+            make_msg(
+                "assistant",
+                json!([{"type": "tool_use", "name": "t", "input": {}}]),
+                15,
+            ),
             make_msg("user", json!("question 2"), 5),
             make_msg("assistant", json!("answer 1"), 10),
             make_msg("user", json!("question 1"), 5),
@@ -262,7 +287,11 @@ mod tests {
         // Budget is 10, but the tool pair costs 35
         let rows = vec![
             make_msg("tool", json!({"content": "result"}), 20),
-            make_msg("assistant", json!([{"type": "tool_use", "name": "t", "input": {}}]), 15),
+            make_msg(
+                "assistant",
+                json!([{"type": "tool_use", "name": "t", "input": {}}]),
+                15,
+            ),
             make_msg("user", json!("question"), 5),
         ];
 
@@ -313,10 +342,7 @@ mod tests {
 
         // Reverse to chronological
         selected.reverse();
-        let messages: Vec<HistoryMessage> = selected
-            .into_iter()
-            .flat_map(|t| t.messages)
-            .collect();
+        let messages: Vec<HistoryMessage> = selected.into_iter().flat_map(|t| t.messages).collect();
 
         assert_eq!(messages.len(), 10);
         // The most recent messages should be included (messages 10-19 in the original 0-19 sequence).

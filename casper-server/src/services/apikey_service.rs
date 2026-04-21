@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -84,7 +84,9 @@ pub async fn create(
     actor: &str,
 ) -> Result<ApiKeyCreatedResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let id = Uuid::now_v7();
@@ -95,7 +97,7 @@ pub async fn create(
     let row: ApiKeyRow = sqlx::query_as(
         "INSERT INTO api_keys (id, tenant_id, name, scopes, key_hash, key_prefix, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by"
+         RETURNING id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by",
     )
     .bind(id)
     .bind(tenant_id.0)
@@ -107,13 +109,16 @@ pub async fn create(
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("api_keys_tenant_id_name_key") => {
+        sqlx::Error::Database(ref db_err)
+            if db_err.constraint() == Some("api_keys_tenant_id_name_key") =>
+        {
             CasperError::Conflict(format!("API key '{}' already exists in tenant", req.name))
         }
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(ApiKeyCreatedResponse {
@@ -135,7 +140,9 @@ pub async fn list(
     params: &PaginationParams,
 ) -> Result<PaginatedResponse<ApiKeyResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let offset = params.offset();
@@ -147,7 +154,7 @@ pub async fn list(
 
     let rows: Vec<ApiKeyRow> = sqlx::query_as(
         "SELECT id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by
-         FROM api_keys ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+         FROM api_keys ORDER BY created_at DESC LIMIT $1 OFFSET $2",
     )
     .bind(params.limit())
     .bind(offset)
@@ -155,7 +162,8 @@ pub async fn list(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
@@ -176,19 +184,22 @@ pub async fn get(
     id: Uuid,
 ) -> Result<ApiKeyResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<ApiKeyRow> = sqlx::query_as(
         "SELECT id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by
-         FROM api_keys WHERE id = $1"
+         FROM api_keys WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -202,7 +213,9 @@ pub async fn update(
     req: &UpdateApiKeyRequest,
 ) -> Result<ApiKeyResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<ApiKeyRow> = sqlx::query_as(
@@ -210,7 +223,7 @@ pub async fn update(
             name = COALESCE($2, name),
             scopes = COALESCE($3, scopes)
          WHERE id = $1
-         RETURNING id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by"
+         RETURNING id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by",
     )
     .bind(id)
     .bind(&req.name)
@@ -219,7 +232,8 @@ pub async fn update(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -232,20 +246,23 @@ pub async fn delete(
     id: Uuid,
 ) -> Result<ApiKeyResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<ApiKeyRow> = sqlx::query_as(
         "UPDATE api_keys SET is_active = false
          WHERE id = $1
-         RETURNING id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by"
+         RETURNING id, tenant_id, name, scopes, key_prefix, is_active, created_at, created_by",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)

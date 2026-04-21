@@ -9,9 +9,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::auth::ScopeGuard;
 use crate::pagination::PaginationParams;
-use crate::services::user_service::{
-    self, CreateUserRequest, UpdateUserRequest, UserResponse,
-};
+use crate::services::user_service::{self, CreateUserRequest, UpdateUserRequest, UserResponse};
 
 // ── Handlers ──────────────────────────────────────────────────────
 
@@ -81,5 +79,8 @@ async fn delete_user(
 pub fn user_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/users", post(create_user).get(list_users))
-        .route("/api/v1/users/{id}", get(get_user).patch(update_user).delete(delete_user))
+        .route(
+            "/api/v1/users/{id}",
+            get(get_user).patch(update_user).delete(delete_user),
+        )
 }

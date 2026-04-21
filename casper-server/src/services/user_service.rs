@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -83,7 +83,9 @@ pub async fn create(
     actor: &str,
 ) -> Result<UserResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let id = Uuid::now_v7();
@@ -110,7 +112,8 @@ pub async fn create(
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(row_to_response(row))
@@ -122,7 +125,9 @@ pub async fn list(
     params: &PaginationParams,
 ) -> Result<PaginatedResponse<UserResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let offset = params.offset();
@@ -142,7 +147,8 @@ pub async fn list(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
@@ -157,13 +163,11 @@ pub async fn list(
     })
 }
 
-pub async fn get(
-    db: &PgPool,
-    tenant_id: TenantId,
-    id: Uuid,
-) -> Result<UserResponse, CasperError> {
+pub async fn get(db: &PgPool, tenant_id: TenantId, id: Uuid) -> Result<UserResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<UserRow> = sqlx::query_as(
@@ -175,7 +179,8 @@ pub async fn get(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -189,7 +194,9 @@ pub async fn update(
     req: &UpdateUserRequest,
 ) -> Result<UserResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<UserRow> = sqlx::query_as(
@@ -208,7 +215,8 @@ pub async fn update(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -221,7 +229,9 @@ pub async fn delete(
     id: Uuid,
 ) -> Result<serde_json::Value, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let result = sqlx::query("DELETE FROM tenant_users WHERE id = $1")
@@ -234,7 +244,8 @@ pub async fn delete(
         return Err(CasperError::NotFound(format!("user {id}")));
     }
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(serde_json::json!({ "deleted": true }))

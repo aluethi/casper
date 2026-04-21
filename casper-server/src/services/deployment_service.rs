@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -31,11 +31,21 @@ pub struct CreateDeploymentRequest {
     pub fallback_deployment_id: Option<Uuid>,
 }
 
-fn default_retry_attempts() -> i32 { 1 }
-fn default_retry_backoff_ms() -> i32 { 1000 }
-fn default_true() -> bool { true }
-fn default_timeout_ms() -> i32 { 30000 }
-fn default_json_obj() -> serde_json::Value { serde_json::json!({}) }
+fn default_retry_attempts() -> i32 {
+    1
+}
+fn default_retry_backoff_ms() -> i32 {
+    1000
+}
+fn default_true() -> bool {
+    true
+}
+fn default_timeout_ms() -> i32 {
+    30000
+}
+fn default_json_obj() -> serde_json::Value {
+    serde_json::json!({})
+}
 
 #[derive(Deserialize)]
 pub struct UpdateDeploymentRequest {
@@ -54,9 +64,7 @@ pub struct UpdateDeploymentRequest {
 }
 
 /// Distinguishes absent field (→ None) from explicit null (→ Some(None)).
-fn deserialize_optional_nullable<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<Uuid>>, D::Error>
+fn deserialize_optional_nullable<'de, D>(deserializer: D) -> Result<Option<Option<Uuid>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -121,8 +129,7 @@ fn row_to_response(r: DeploymentRow) -> DeploymentResponse {
     }
 }
 
-const DEPLOYMENT_COLUMNS: &str =
-    "id, tenant_id, model_id, name, slug, \
+const DEPLOYMENT_COLUMNS: &str = "id, tenant_id, model_id, name, slug, \
      backend_sequence, retry_attempts, retry_backoff_ms, fallback_enabled, timeout_ms, \
      default_params, rate_limit_rpm, fallback_deployment_id, is_active, created_at";
 
@@ -165,17 +172,18 @@ pub async fn create(
     req: &CreateDeploymentRequest,
 ) -> Result<DeploymentResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Validate model exists and is published
-    let model_check: Option<(bool, bool)> = sqlx::query_as(
-        "SELECT published, is_active FROM models WHERE id = $1"
-    )
-    .bind(req.model_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    let model_check: Option<(bool, bool)> =
+        sqlx::query_as("SELECT published, is_active FROM models WHERE id = $1")
+            .bind(req.model_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     match model_check {
         None => return Err(CasperError::NotFound(format!("model {}", req.model_id))),
@@ -190,7 +198,7 @@ pub async fn create(
 
     // Validate quota exists for this tenant + model
     let has_quota: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM model_quotas WHERE tenant_id = $1 AND model_id = $2)"
+        "SELECT EXISTS(SELECT 1 FROM model_quotas WHERE tenant_id = $1 AND model_id = $2)",
     )
     .bind(tenant_id.0)
     .bind(req.model_id)
@@ -238,7 +246,8 @@ pub async fn create(
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(row_to_response(row))
@@ -250,18 +259,19 @@ pub async fn list(
     params: &PaginationParams,
 ) -> Result<PaginatedResponse<DeploymentResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let offset = params.offset();
 
-    let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM model_deployments WHERE tenant_id = $1"
-    )
-    .bind(tenant_id.0)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    let total: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM model_deployments WHERE tenant_id = $1")
+            .bind(tenant_id.0)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<DeploymentRow> = sqlx::query_as(&format!(
         "SELECT {DEPLOYMENT_COLUMNS} FROM model_deployments
@@ -275,7 +285,8 @@ pub async fn list(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let data = rows.into_iter().map(row_to_response).collect();
@@ -296,7 +307,9 @@ pub async fn get(
     id: Uuid,
 ) -> Result<DeploymentResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<DeploymentRow> = sqlx::query_as(&format!(
@@ -308,7 +321,8 @@ pub async fn get(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -322,7 +336,9 @@ pub async fn update(
     req: &UpdateDeploymentRequest,
 ) -> Result<DeploymentResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // fallback_deployment_id is Option<Option<Uuid>>:
@@ -373,7 +389,8 @@ pub async fn update(
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -386,7 +403,9 @@ pub async fn delete(
     id: Uuid,
 ) -> Result<DeploymentResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<DeploymentRow> = sqlx::query_as(&format!(
@@ -400,7 +419,8 @@ pub async fn delete(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -413,12 +433,14 @@ pub async fn test_route(
     id: Uuid,
 ) -> Result<TestRouteResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let dep: Option<DeploymentTestRow> = sqlx::query_as(
         "SELECT model_id, backend_sequence FROM model_deployments
-         WHERE id = $1 AND tenant_id = $2 AND is_active = true"
+         WHERE id = $1 AND tenant_id = $2 AND is_active = true",
     )
     .bind(id)
     .bind(tenant_id.0)
@@ -426,9 +448,7 @@ pub async fn test_route(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    let dep = dep.ok_or_else(|| {
-        CasperError::NotFound(format!("active deployment {id}"))
-    })?;
+    let dep = dep.ok_or_else(|| CasperError::NotFound(format!("active deployment {id}")))?;
     let model_id = dep.model_id;
     let backend_sequence = dep.backend_sequence;
 
@@ -438,7 +458,7 @@ pub async fn test_route(
              FROM platform_backend_models pbm
              JOIN platform_backends pb ON pb.id = pbm.backend_id
              WHERE pbm.model_id = $1 AND pb.is_active = true
-             ORDER BY pbm.priority"
+             ORDER BY pbm.priority",
         )
         .bind(model_id)
         .fetch_all(&mut *tx)
@@ -450,7 +470,7 @@ pub async fn test_route(
              FROM unnest($1::UUID[]) WITH ORDINALITY AS s(backend_id, ord)
              JOIN platform_backends pb ON pb.id = s.backend_id
              WHERE pb.is_active = true
-             ORDER BY s.ord"
+             ORDER BY s.ord",
         )
         .bind(&backend_sequence)
         .fetch_all(&mut *tx)
@@ -458,7 +478,8 @@ pub async fn test_route(
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?
     };
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let resolved = backends

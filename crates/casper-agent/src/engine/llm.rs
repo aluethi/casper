@@ -6,9 +6,9 @@
 //! retry/fallback).
 
 use casper_base::CasperError;
-use casper_catalog::{LlmRequest, LlmResponse, StreamEvent};
 #[cfg(test)]
 use casper_catalog::MessageRole;
+use casper_catalog::{LlmRequest, LlmResponse, StreamEvent};
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -33,10 +33,18 @@ pub trait LlmCaller: Send + Sync {
         let (response, backend_id) = self.call(tenant_id, request).await?;
         // Emit the buffered response as stream events
         if let Some(ref thinking) = response.thinking {
-            let _ = tx.send(StreamEvent::Thinking { delta: thinking.clone() }).await;
+            let _ = tx
+                .send(StreamEvent::Thinking {
+                    delta: thinking.clone(),
+                })
+                .await;
         }
         if !response.content.is_empty() {
-            let _ = tx.send(StreamEvent::ContentDelta { delta: response.content.clone() }).await;
+            let _ = tx
+                .send(StreamEvent::ContentDelta {
+                    delta: response.content.clone(),
+                })
+                .await;
         }
         Ok((response, backend_id))
     }
@@ -59,8 +67,7 @@ impl LlmCaller for RealLlmCaller {
             casper_catalog::resolve_deployment(&self.db, tenant_id, &request.model).await?;
         casper_catalog::check_quota(&self.db, tenant_id, deployment.model_id).await?;
 
-        let merged_extra =
-            casper_catalog::merge_params(&deployment.default_params, &request.extra);
+        let merged_extra = casper_catalog::merge_params(&deployment.default_params, &request.extra);
 
         let mut patched_request = request.clone();
         patched_request.model = deployment.model_name.clone();
@@ -83,17 +90,20 @@ impl LlmCaller for RealLlmCaller {
             casper_catalog::resolve_deployment(&self.db, tenant_id, &request.model).await?;
         casper_catalog::check_quota(&self.db, tenant_id, deployment.model_id).await?;
 
-        let merged_extra =
-            casper_catalog::merge_params(&deployment.default_params, &request.extra);
+        let merged_extra = casper_catalog::merge_params(&deployment.default_params, &request.extra);
 
         let mut patched_request = request.clone();
         patched_request.model = deployment.model_name.clone();
         patched_request.extra = merged_extra;
         patched_request.stream = true;
 
-        let (response, backend) =
-            casper_catalog::dispatch_stream_with_retry(&self.http_client, &deployment, &patched_request, tx)
-                .await?;
+        let (response, backend) = casper_catalog::dispatch_stream_with_retry(
+            &self.http_client,
+            &deployment,
+            &patched_request,
+            tx,
+        )
+        .await?;
 
         Ok((response, Some(backend.id)))
     }
@@ -134,7 +144,11 @@ impl MockLlmCaller {
     }
 
     /// Create a mock that first returns a tool call, then a text response.
-    pub fn with_tool_call(tool_name: &str, tool_input: serde_json::Value, final_text: &str) -> Self {
+    pub fn with_tool_call(
+        tool_name: &str,
+        tool_input: serde_json::Value,
+        final_text: &str,
+    ) -> Self {
         Self::new(vec![
             LlmResponse {
                 content: String::new(),
@@ -179,7 +193,9 @@ impl LlmCaller for MockLlmCaller {
     ) -> Result<(LlmResponse, Option<Uuid>), CasperError> {
         let mut responses = self.responses.lock().unwrap();
         if responses.is_empty() {
-            return Err(CasperError::Internal("MockLlmCaller: no more responses".into()));
+            return Err(CasperError::Internal(
+                "MockLlmCaller: no more responses".into(),
+            ));
         }
         Ok((responses.remove(0), None))
     }

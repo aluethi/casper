@@ -144,51 +144,76 @@ pub async fn update(
 
     if let Some(ref display_name) = req.display_name {
         sqlx::query("UPDATE oauth_providers SET display_name = $1 WHERE name = $2")
-            .bind(display_name).bind(name).execute(db).await
+            .bind(display_name)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
     if let Some(ref auth_url) = req.authorization_url {
         sqlx::query("UPDATE oauth_providers SET authorization_url = $1 WHERE name = $2")
-            .bind(auth_url).bind(name).execute(db).await
+            .bind(auth_url)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
     if let Some(ref token_url) = req.token_url {
         sqlx::query("UPDATE oauth_providers SET token_url = $1 WHERE name = $2")
-            .bind(token_url).bind(name).execute(db).await
+            .bind(token_url)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
     if let Some(ref revocation_url) = req.revocation_url {
         sqlx::query("UPDATE oauth_providers SET revocation_url = $1 WHERE name = $2")
-            .bind(revocation_url).bind(name).execute(db).await
+            .bind(revocation_url)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
     if let Some(ref client_id) = req.client_id {
         sqlx::query("UPDATE oauth_providers SET client_id = $1 WHERE name = $2")
-            .bind(client_id).bind(name).execute(db).await
+            .bind(client_id)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
     if let Some(ref client_secret) = req.client_secret {
-        let enc = vault.encrypt_value(
-            casper_base::TenantId(Uuid::nil()),
-            client_secret.as_bytes(),
-        )?;
+        let enc =
+            vault.encrypt_value(casper_base::TenantId(Uuid::nil()), client_secret.as_bytes())?;
         sqlx::query("UPDATE oauth_providers SET client_secret_enc = $1 WHERE name = $2")
-            .bind(&enc).bind(name).execute(db).await
+            .bind(&enc)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
     if let Some(ref default_scopes) = req.default_scopes {
         sqlx::query("UPDATE oauth_providers SET default_scopes = $1 WHERE name = $2")
-            .bind(default_scopes).bind(name).execute(db).await
+            .bind(default_scopes)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
     if let Some(ref icon_url) = req.icon_url {
         sqlx::query("UPDATE oauth_providers SET icon_url = $1 WHERE name = $2")
-            .bind(icon_url).bind(name).execute(db).await
+            .bind(icon_url)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
     if let Some(is_active) = req.is_active {
         sqlx::query("UPDATE oauth_providers SET is_active = $1 WHERE name = $2")
-            .bind(is_active).bind(name).execute(db).await
+            .bind(is_active)
+            .bind(name)
+            .execute(db)
+            .await
             .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     }
 
@@ -235,18 +260,28 @@ pub async fn register_mcp(
     let auth = casper_agent::mcp::oauth::discover(http_client, mcp_url)
         .await
         .map_err(|e| CasperError::BadGateway(format!("MCP OAuth discovery failed: {e}")))?
-        .ok_or_else(|| CasperError::BadRequest(
-            "MCP server did not return 401 — it may not require OAuth".into(),
-        ))?;
+        .ok_or_else(|| {
+            CasperError::BadRequest(
+                "MCP server did not return 401 — it may not require OAuth".into(),
+            )
+        })?;
 
     // Step 4: Dynamic Client Registration
-    let reg_endpoint = auth.as_metadata.registration_endpoint.as_deref()
-        .ok_or_else(|| CasperError::BadGateway(
-            "Authorization server does not support Dynamic Client Registration".into(),
-        ))?;
+    let reg_endpoint = auth
+        .as_metadata
+        .registration_endpoint
+        .as_deref()
+        .ok_or_else(|| {
+            CasperError::BadGateway(
+                "Authorization server does not support Dynamic Client Registration".into(),
+            )
+        })?;
 
     let dcr = casper_agent::mcp::oauth::register_client(
-        http_client, reg_endpoint, redirect_uri, "Casper",
+        http_client,
+        reg_endpoint,
+        redirect_uri,
+        "Casper",
     )
     .await
     .map_err(|e| CasperError::BadGateway(format!("DCR failed: {e}")))?;
@@ -270,10 +305,8 @@ pub async fn register_mcp(
 
     // Encrypt client_secret (may be empty for public clients)
     let client_secret = dcr.client_secret.as_deref().unwrap_or("");
-    let client_secret_enc = vault.encrypt_value(
-        casper_base::TenantId(Uuid::nil()),
-        client_secret.as_bytes(),
-    )?;
+    let client_secret_enc =
+        vault.encrypt_value(casper_base::TenantId(Uuid::nil()), client_secret.as_bytes())?;
 
     let id = Uuid::now_v7();
 
@@ -332,7 +365,8 @@ pub async fn load_provider_with_secret(
         token_url: row.1,
         revocation_url: row.2,
         client_id: row.3,
-        client_secret: client_secret.expose_str()
+        client_secret: client_secret
+            .expose_str()
             .map_err(|e| CasperError::Internal(format!("invalid client_secret encoding: {e}")))?
             .to_string(),
         default_scopes: row.5,

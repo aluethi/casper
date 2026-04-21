@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::Serialize;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -325,10 +325,8 @@ pub async fn get_agent_memory_version(
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    row.ok_or_else(|| {
-        CasperError::NotFound(format!("agent memory '{name}' version {version}"))
-    })
-    .map(agent_history_to_response)
+    row.ok_or_else(|| CasperError::NotFound(format!("agent memory '{name}' version {version}")))
+        .map(agent_history_to_response)
 }
 
 // ══════════════════════════════════════════════════════════════════

@@ -54,7 +54,7 @@ async fn add_domain(
     let row: DomainRow = sqlx::query_as(
         "INSERT INTO email_domains (domain, tenant_id)
          VALUES ($1, $2)
-         RETURNING domain, tenant_id, verified, created_at"
+         RETURNING domain, tenant_id, verified, created_at",
     )
     .bind(&body.domain)
     .bind(tenant_id)
@@ -81,7 +81,7 @@ async fn list_domains(
     let rows: Vec<DomainRow> = sqlx::query_as(
         "SELECT domain, tenant_id, verified, created_at
          FROM email_domains WHERE tenant_id = $1
-         ORDER BY created_at DESC"
+         ORDER BY created_at DESC",
     )
     .bind(tenant_id)
     .fetch_all(&state.db_owner)
@@ -108,7 +108,9 @@ async fn delete_domain(
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     if result.rows_affected() == 0 {
-        return Err(CasperError::NotFound(format!("domain '{domain}' for tenant {tenant_id}")));
+        return Err(CasperError::NotFound(format!(
+            "domain '{domain}' for tenant {tenant_id}"
+        )));
     }
 
     Ok(Json(serde_json::json!({ "deleted": true })))
@@ -116,6 +118,12 @@ async fn delete_domain(
 
 pub fn domain_router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/tenants/{id}/domains", post(add_domain).get(list_domains))
-        .route("/api/v1/tenants/{id}/domains/{domain}", axum::routing::delete(delete_domain))
+        .route(
+            "/api/v1/tenants/{id}/domains",
+            post(add_domain).get(list_domains),
+        )
+        .route(
+            "/api/v1/tenants/{id}/domains/{domain}",
+            axum::routing::delete(delete_domain),
+        )
 }

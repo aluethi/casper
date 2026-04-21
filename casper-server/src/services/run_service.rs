@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -105,7 +105,9 @@ pub async fn prepare_conversation(
     message: &str,
 ) -> Result<Uuid, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Verify agent exists and is active
@@ -170,7 +172,8 @@ pub async fn prepare_conversation(
         }
     };
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(conv_id)
@@ -218,19 +221,23 @@ pub async fn execute_run(
                     tool_calls: resp.usage.tool_calls,
                     duration_ms: resp.usage.duration_ms,
                 };
-                let steps: Vec<StepResponse> = resp.steps.into_iter().map(|s| {
-                    StepResponse {
+                let steps: Vec<StepResponse> = resp
+                    .steps
+                    .into_iter()
+                    .map(|s| StepResponse {
                         thinking: s.thinking,
                         tool_calls: s.tool_calls.map(|tcs| {
-                            tcs.into_iter().map(|tc| ToolCallStepResponse {
-                                name: tc.name,
-                                input: tc.input,
-                                result: tc.result,
-                                is_error: tc.is_error,
-                            }).collect()
+                            tcs.into_iter()
+                                .map(|tc| ToolCallStepResponse {
+                                    name: tc.name,
+                                    input: tc.input,
+                                    result: tc.result,
+                                    is_error: tc.is_error,
+                                })
+                                .collect()
                         }),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 (resp.message, usage, steps)
             }
             Err(e) => {
@@ -242,7 +249,11 @@ pub async fn execute_run(
                 let placeholder = format!(
                     "[Placeholder] Agent '{}' received your message but the LLM backend is unavailable. Message: {}",
                     agent_name,
-                    if message.len() > 100 { &message[..100] } else { message }
+                    if message.len() > 100 {
+                        &message[..100]
+                    } else {
+                        message
+                    }
                 );
                 let usage = UsageResponse {
                     input_tokens: 0,
@@ -298,25 +309,31 @@ pub async fn execute_run(
     }
 
     // Get the most recent assistant message for the response
-    let msg_row: Option<(Uuid, String, serde_json::Value, OffsetDateTime)> = if let Ok(mut tx) = tdb.begin().await {
-        let row = sqlx::query_as(
-            "SELECT id, role, content, created_at FROM messages
+    let msg_row: Option<(Uuid, String, serde_json::Value, OffsetDateTime)> =
+        if let Ok(mut tx) = tdb.begin().await {
+            let row = sqlx::query_as(
+                "SELECT id, role, content, created_at FROM messages
              WHERE conversation_id = $1 AND role = 'assistant'
              ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(conversation_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .ok()
-        .flatten();
-        tx.commit().await.ok();
-        row
-    } else {
-        None
-    };
+            )
+            .bind(conversation_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .ok()
+            .flatten();
+            tx.commit().await.ok();
+            row
+        } else {
+            None
+        };
 
     let (msg_id, msg_role, msg_content, msg_created) = msg_row.unwrap_or_else(|| {
-        (Uuid::now_v7(), "assistant".to_string(), serde_json::Value::String(assistant_text.clone()), OffsetDateTime::now_utc())
+        (
+            Uuid::now_v7(),
+            "assistant".to_string(),
+            serde_json::Value::String(assistant_text.clone()),
+            OffsetDateTime::now_utc(),
+        )
     });
 
     Ok(RunResponse {
@@ -334,10 +351,7 @@ pub async fn execute_run(
 }
 
 /// Poll an async task by ID.
-pub fn get_task_status(
-    state: &AppState,
-    task_id: Uuid,
-) -> Result<TaskStatusResponse, CasperError> {
+pub fn get_task_status(state: &AppState, task_id: Uuid) -> Result<TaskStatusResponse, CasperError> {
     match state.async_tasks.get(&task_id) {
         Some(entry) => {
             let value = entry.value();

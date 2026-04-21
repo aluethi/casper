@@ -121,12 +121,23 @@ async fn available_backends(
 
 pub fn deployment_router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/deployments", post(create_deployment).get(list_deployments))
-        .route("/api/v1/deployments/available-models", get(available_models))
-        .route("/api/v1/deployments/available-backends", get(available_backends))
+        .route(
+            "/api/v1/deployments",
+            post(create_deployment).get(list_deployments),
+        )
+        .route(
+            "/api/v1/deployments/available-models",
+            get(available_models),
+        )
+        .route(
+            "/api/v1/deployments/available-backends",
+            get(available_backends),
+        )
         .route(
             "/api/v1/deployments/{id}",
-            get(get_deployment).patch(update_deployment).delete(delete_deployment),
+            get(get_deployment)
+                .patch(update_deployment)
+                .delete(delete_deployment),
         )
         .route("/api/v1/deployments/{id}/test", post(test_deployment))
 }

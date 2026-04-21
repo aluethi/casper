@@ -203,7 +203,9 @@ pub fn resolve_secret(key: &str) -> Result<SecretValue, String> {
     } else if let Ok(value) = std::env::var(key) {
         Ok(SecretValue::from_str(&value))
     } else {
-        Err(format!("secret {key} not found (checked {key} and {file_key})"))
+        Err(format!(
+            "secret {key} not found (checked {key} and {file_key})"
+        ))
     }
 }
 

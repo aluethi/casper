@@ -147,9 +147,10 @@ impl ToolDispatcher {
         input: serde_json::Value,
         ctx: &ToolContext,
     ) -> Result<ToolResult, CasperError> {
-        let tool = self.tools.get(tool_name).ok_or_else(|| {
-            CasperError::BadRequest(format!("unknown tool: {tool_name}"))
-        })?;
+        let tool = self
+            .tools
+            .get(tool_name)
+            .ok_or_else(|| CasperError::BadRequest(format!("unknown tool: {tool_name}")))?;
         tool.execute(input, ctx).await
     }
 
@@ -269,7 +270,10 @@ pub async fn build_dispatcher(
             let url = match server_cfg.get("url").and_then(|v| v.as_str()) {
                 Some(u) => u,
                 None => {
-                    tracing::warn!(server = server_name, "MCP server config missing 'url' — skipping");
+                    tracing::warn!(
+                        server = server_name,
+                        "MCP server config missing 'url' — skipping"
+                    );
                     continue;
                 }
             };
@@ -301,11 +305,7 @@ pub async fn build_dispatcher(
                 }
             };
 
-            let client = Arc::new(crate::McpClient::new(
-                url,
-                api_key,
-                http_client.clone(),
-            ));
+            let client = Arc::new(crate::McpClient::new(url, api_key, http_client.clone()));
 
             let tools = mcp::discover_and_wrap(server_name, client, mcp_auth).await;
             for tool in tools {
@@ -315,9 +315,17 @@ pub async fn build_dispatcher(
     }
 
     tracing::debug!(
-        builtin = tools_config.get("builtin").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
+        builtin = tools_config
+            .get("builtin")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0),
         mcp = dispatcher.len().saturating_sub(
-            tools_config.get("builtin").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
+            tools_config
+                .get("builtin")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0)
         ),
         total = dispatcher.len(),
         "tool dispatcher built"

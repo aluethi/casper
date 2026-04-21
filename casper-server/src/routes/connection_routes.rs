@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     response::Redirect,
-    routing::{get, post, delete},
+    routing::{delete, get, post},
 };
 use casper_base::CasperError;
 use serde::Deserialize;
@@ -49,13 +49,23 @@ async fn start_flow(
     let user = guard.0.actor();
 
     // Determine the base URL for the callback
-    let redirect_base = state.config.listen.public_url.clone()
+    let redirect_base = state
+        .config
+        .listen
+        .public_url
+        .clone()
         .unwrap_or_else(|| "http://localhost:3000".to_string());
 
     let auth_url = connection_service::start_oauth_flow(
-        &state.db_owner, &state.vault, &state.http_client,
-        tenant_id, &user, &provider, &redirect_base,
-    ).await?;
+        &state.db_owner,
+        &state.vault,
+        &state.http_client,
+        tenant_id,
+        &user,
+        &provider,
+        &redirect_base,
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({ "redirect_url": auth_url })))
 }
@@ -71,16 +81,27 @@ async fn oauth_callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackQuery>,
 ) -> Result<Redirect, CasperError> {
-    let redirect_base = state.config.listen.public_url.clone()
+    let redirect_base = state
+        .config
+        .listen
+        .public_url
+        .clone()
         .unwrap_or_else(|| "http://localhost:3000".to_string());
 
     let (_tenant_id, provider_name) = connection_service::handle_callback(
-        &state.db_owner, &state.vault, &state.http_client,
-        &params.code, &params.state, &redirect_base,
-    ).await?;
+        &state.db_owner,
+        &state.vault,
+        &state.http_client,
+        &params.code,
+        &params.state,
+        &redirect_base,
+    )
+    .await?;
 
     // Redirect to portal connections page
-    Ok(Redirect::to(&format!("/settings/connections?connected={provider_name}")))
+    Ok(Redirect::to(&format!(
+        "/settings/connections?connected={provider_name}"
+    )))
 }
 
 /// DELETE /api/v1/connections/:provider — disconnect.
@@ -93,9 +114,14 @@ async fn disconnect(
     let user = guard.0.actor();
 
     connection_service::disconnect(
-        &state.db, &state.vault, &state.http_client,
-        tenant_id, &user, &provider,
-    ).await?;
+        &state.db,
+        &state.vault,
+        &state.http_client,
+        tenant_id,
+        &user,
+        &provider,
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({ "disconnected": provider })))
 }
@@ -123,11 +149,18 @@ async fn admin_disconnect(
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
 
     connection_service::disconnect(
-        &state.db, &state.vault, &state.http_client,
-        tenant_id, &user_subject, &provider,
-    ).await?;
+        &state.db,
+        &state.vault,
+        &state.http_client,
+        tenant_id,
+        &user_subject,
+        &provider,
+    )
+    .await?;
 
-    Ok(Json(serde_json::json!({ "disconnected": provider, "user": user_subject })))
+    Ok(Json(
+        serde_json::json!({ "disconnected": provider, "user": user_subject }),
+    ))
 }
 
 // ── Router ──────────────────────────────────────────────────────
@@ -139,12 +172,14 @@ pub fn connection_router() -> Router<AppState> {
         .route("/api/v1/connections/all", get(list_all))
         .route("/api/v1/connections/{provider}/start", post(start_flow))
         .route("/api/v1/connections/{provider}", delete(disconnect))
-        .route("/api/v1/connections/{user_subject}/{provider}", delete(admin_disconnect))
+        .route(
+            "/api/v1/connections/{user_subject}/{provider}",
+            delete(admin_disconnect),
+        )
 }
 
 /// Callback route — registered as a public route (no auth middleware, browser redirect).
 /// Single URL for all providers; the provider is derived from the encrypted state param.
 pub fn connection_callback_router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/connections/callback", get(oauth_callback))
+    Router::new().route("/api/v1/connections/callback", get(oauth_callback))
 }

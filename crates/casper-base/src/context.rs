@@ -1,5 +1,5 @@
-use crate::{CasperError, CorrelationId, Role, Subject, TenantId};
 use crate::scope::{Scope, has_scope};
+use crate::{CasperError, CorrelationId, Role, Subject, TenantId};
 
 /// Authenticated request context. Built by auth middleware, passed via Axum extensions.
 #[derive(Debug, Clone)]

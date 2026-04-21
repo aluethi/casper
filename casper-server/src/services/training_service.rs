@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -106,7 +106,9 @@ pub async fn export(
 
     // JSONL format: return conversations with messages and quality tier
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let conv_rows: Vec<(Uuid, String, Option<String>, OffsetDateTime, String)> = sqlx::query_as(
@@ -148,21 +150,19 @@ pub async fn export(
         .map_err(|e| CasperError::Internal(format!("DB error fetching messages: {e}")))?
     };
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Group messages by conversation_id
     let mut msg_map: std::collections::HashMap<Uuid, Vec<TrainingMessage>> =
         std::collections::HashMap::new();
     for (conv_id, role, content, created_at) in msg_rows {
-        msg_map
-            .entry(conv_id)
-            .or_default()
-            .push(TrainingMessage {
-                role,
-                content,
-                created_at,
-            });
+        msg_map.entry(conv_id).or_default().push(TrainingMessage {
+            role,
+            content,
+            created_at,
+        });
     }
 
     let conversations: Vec<TrainingConversation> = conv_rows
@@ -189,7 +189,9 @@ async fn export_pairs(
     params: &ExportParams,
 ) -> Result<ExportResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<(Uuid, String, serde_json::Value, String, OffsetDateTime)> = sqlx::query_as(
@@ -241,7 +243,8 @@ async fn export_pairs(
         });
     }
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(ExportResponse::Pairs(pairs))

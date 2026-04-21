@@ -40,7 +40,10 @@ impl WebSearchTool {
             });
         Self {
             searxng_url: url,
-            max_results: config.get("max_results").and_then(|v| v.as_i64()).unwrap_or(10) as i32,
+            max_results: config
+                .get("max_results")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(10) as i32,
             http_client,
         }
     }
@@ -97,11 +100,7 @@ impl Tool for WebSearchTool {
         let response = self
             .http_client
             .get(&url)
-            .query(&[
-                ("q", query),
-                ("format", "json"),
-                ("categories", "general"),
-            ])
+            .query(&[("q", query), ("format", "json"), ("categories", "general")])
             .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
@@ -179,11 +178,7 @@ mod tests {
 
     #[test]
     fn tool_metadata() {
-        let tool = WebSearchTool::new(
-            "http://localhost:8080".into(),
-            5,
-            reqwest::Client::new(),
-        );
+        let tool = WebSearchTool::new("http://localhost:8080".into(), 5, reqwest::Client::new());
         assert_eq!(tool.name(), "web_search");
         let schema = tool.parameters_schema();
         assert!(schema["properties"]["query"].is_object());

@@ -92,7 +92,12 @@ mod tests {
         let (signer, verifier) = make_signer_and_verifier();
         let tid = TenantId::new();
         let (token, jti) = signer
-            .sign_access_token(tid, "user:test@test.com", "admin", vec!["admin:*".to_string()])
+            .sign_access_token(
+                tid,
+                "user:test@test.com",
+                "admin",
+                vec!["admin:*".to_string()],
+            )
             .unwrap();
 
         let claims = verifier.verify(&token).unwrap();
@@ -106,7 +111,9 @@ mod tests {
     fn refresh_token() {
         let (signer, verifier) = make_signer_and_verifier();
         let tid = TenantId::new();
-        let (token, _jti) = signer.sign_refresh_token(tid, "user:test@test.com").unwrap();
+        let (token, _jti) = signer
+            .sign_refresh_token(tid, "user:test@test.com")
+            .unwrap();
 
         let claims = verifier.verify(&token).unwrap();
         assert_eq!(claims.role, "refresh");

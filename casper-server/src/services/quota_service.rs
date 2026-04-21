@@ -86,8 +86,7 @@ fn row_to_response(r: QuotaRow) -> QuotaResponse {
     }
 }
 
-const QUOTA_COLUMNS: &str =
-    "tenant_id, model_id, requests_per_minute, tokens_per_day, cache_tokens_per_day, \
+const QUOTA_COLUMNS: &str = "tenant_id, model_id, requests_per_minute, tokens_per_day, cache_tokens_per_day, \
      cost_per_1k_input, cost_per_1k_output, cost_per_1k_cache_read, cost_per_1k_cache_write, \
      allocated_by, allocated_at";
 
@@ -120,9 +119,7 @@ pub async fn allocate(
     .fetch_one(db)
     .await
     .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err)
-            if db_err.constraint() == Some("model_quotas_pkey") =>
-        {
+        sqlx::Error::Database(ref db_err) if db_err.constraint() == Some("model_quotas_pkey") => {
             CasperError::Conflict(format!(
                 "quota already exists for model {} in tenant {tenant_id}",
                 req.model_id
@@ -134,10 +131,7 @@ pub async fn allocate(
     Ok(row_to_response(row))
 }
 
-pub async fn list(
-    db: &PgPool,
-    tenant_id: Uuid,
-) -> Result<Vec<QuotaResponse>, CasperError> {
+pub async fn list(db: &PgPool, tenant_id: Uuid) -> Result<Vec<QuotaResponse>, CasperError> {
     let rows: Vec<QuotaRow> = sqlx::query_as(&format!(
         "SELECT {QUOTA_COLUMNS} FROM model_quotas WHERE tenant_id = $1 ORDER BY allocated_at DESC"
     ))
@@ -184,10 +178,9 @@ pub async fn update(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    row.map(row_to_response)
-        .ok_or_else(|| {
-            CasperError::NotFound(format!("quota for model {model_id} in tenant {tenant_id}"))
-        })
+    row.map(row_to_response).ok_or_else(|| {
+        CasperError::NotFound(format!("quota for model {model_id} in tenant {tenant_id}"))
+    })
 }
 
 pub async fn delete(
@@ -195,14 +188,12 @@ pub async fn delete(
     tenant_id: Uuid,
     model_id: Uuid,
 ) -> Result<serde_json::Value, CasperError> {
-    let result = sqlx::query(
-        "DELETE FROM model_quotas WHERE tenant_id = $1 AND model_id = $2"
-    )
-    .bind(tenant_id)
-    .bind(model_id)
-    .execute(db)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    let result = sqlx::query("DELETE FROM model_quotas WHERE tenant_id = $1 AND model_id = $2")
+        .bind(tenant_id)
+        .bind(model_id)
+        .execute(db)
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     if result.rows_affected() == 0 {
         return Err(CasperError::NotFound(format!(

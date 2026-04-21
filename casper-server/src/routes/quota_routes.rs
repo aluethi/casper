@@ -22,7 +22,8 @@ async fn allocate_quota(
     Json(body): Json<AllocateQuotaRequest>,
 ) -> Result<Json<QuotaResponse>, CasperError> {
     guard.require("platform:admin")?;
-    let result = quota_service::allocate(&state.db_owner, tenant_id, &body, &guard.0.actor()).await?;
+    let result =
+        quota_service::allocate(&state.db_owner, tenant_id, &body, &guard.0.actor()).await?;
     Ok(Json(result))
 }
 
@@ -45,7 +46,14 @@ async fn update_quota(
     Json(body): Json<UpdateQuotaRequest>,
 ) -> Result<Json<QuotaResponse>, CasperError> {
     guard.require("platform:admin")?;
-    let result = quota_service::update(&state.db_owner, tenant_id, model_id, &body, &guard.0.actor()).await?;
+    let result = quota_service::update(
+        &state.db_owner,
+        tenant_id,
+        model_id,
+        &body,
+        &guard.0.actor(),
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -64,7 +72,10 @@ async fn delete_quota(
 
 pub fn quota_router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/tenants/{id}/quotas", post(allocate_quota).get(list_quotas))
+        .route(
+            "/api/v1/tenants/{id}/quotas",
+            post(allocate_quota).get(list_quotas),
+        )
         .route(
             "/api/v1/tenants/{id}/quotas/{model_id}",
             axum::routing::patch(update_quota).delete(delete_quota),

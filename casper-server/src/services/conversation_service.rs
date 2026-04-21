@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -14,7 +14,10 @@ fn serialize_dt<S: serde::Serializer>(dt: &OffsetDateTime, s: S) -> Result<S::Ok
     s.serialize_str(&to_rfc3339(*dt))
 }
 
-fn serialize_dt_opt<S: serde::Serializer>(dt: &Option<OffsetDateTime>, s: S) -> Result<S::Ok, S::Error> {
+fn serialize_dt_opt<S: serde::Serializer>(
+    dt: &Option<OffsetDateTime>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
     match dt {
         Some(dt) => s.serialize_str(&to_rfc3339(*dt)),
         None => s.serialize_none(),
@@ -32,8 +35,12 @@ pub struct ListConversationsParams {
     pub outcome: Option<String>,
 }
 
-fn default_page() -> i64 { 1 }
-fn default_per_page() -> i64 { 50 }
+fn default_page() -> i64 {
+    1
+}
+fn default_per_page() -> i64 {
+    50
+}
 
 #[derive(sqlx::FromRow, Serialize)]
 pub struct ConversationResponse {
@@ -88,7 +95,9 @@ pub async fn list(
     params: &ListConversationsParams,
 ) -> Result<PaginatedResponse<ConversationResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let offset = (params.page.max(1) - 1) * params.per_page.clamp(1, 100);
@@ -98,7 +107,7 @@ pub async fn list(
          WHERE tenant_id = $1
            AND ($2::TEXT IS NULL OR agent_name = $2)
            AND ($3::TEXT IS NULL OR status = $3)
-           AND ($4::TEXT IS NULL OR outcome = $4)"
+           AND ($4::TEXT IS NULL OR outcome = $4)",
     )
     .bind(tenant_id.0)
     .bind(&params.agent_name)
@@ -128,7 +137,8 @@ pub async fn list(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(PaginatedResponse {
@@ -147,7 +157,9 @@ pub async fn get_with_messages(
     id: Uuid,
 ) -> Result<ConversationDetailResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let conversation: Option<ConversationResponse> = sqlx::query_as(
@@ -167,7 +179,7 @@ pub async fn get_with_messages(
         "SELECT id, conversation_id, role, author, content, token_count, created_at
          FROM messages
          WHERE conversation_id = $1 AND tenant_id = $2
-         ORDER BY created_at"
+         ORDER BY created_at",
     )
     .bind(id)
     .bind(tenant_id.0)
@@ -175,7 +187,8 @@ pub async fn get_with_messages(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(ConversationDetailResponse {
@@ -190,7 +203,9 @@ pub async fn delete(
     id: Uuid,
 ) -> Result<serde_json::Value, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let result = sqlx::query("DELETE FROM conversations WHERE id = $1 AND tenant_id = $2")
@@ -204,7 +219,8 @@ pub async fn delete(
         return Err(CasperError::NotFound(format!("conversation {id}")));
     }
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(serde_json::json!({ "deleted": true }))
@@ -226,7 +242,9 @@ pub async fn set_outcome(
     }
 
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<ConversationResponse> = sqlx::query_as(
@@ -248,7 +266,8 @@ pub async fn set_outcome(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.ok_or_else(|| CasperError::NotFound(format!("conversation {id}")))

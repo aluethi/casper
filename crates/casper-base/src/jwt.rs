@@ -143,13 +143,8 @@ mod tests {
         let pkcs8_bytes = pkcs8.as_ref().to_vec();
 
         // Extract public key via ring's KeyPair API
-        let key_pair =
-            ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
-        let pub_bytes: [u8; 32] = key_pair
-            .public_key()
-            .as_ref()
-            .try_into()
-            .unwrap();
+        let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let pub_bytes: [u8; 32] = key_pair.public_key().as_ref().try_into().unwrap();
 
         let encoding_key = EncodingKey::from_ed_der(&pkcs8_bytes);
         let verifier = JwtVerifier::from_public_key(&pub_bytes).unwrap();
@@ -194,7 +189,10 @@ mod tests {
         claims.exp = time::OffsetDateTime::now_utc().unix_timestamp() - 100;
 
         let token = sign_token(&encoding_key, &claims);
-        assert!(matches!(verifier.verify(&token), Err(CasperError::Unauthorized)));
+        assert!(matches!(
+            verifier.verify(&token),
+            Err(CasperError::Unauthorized)
+        ));
     }
 
     #[test]

@@ -1,19 +1,22 @@
 //! Service layer for user connections (per-user OAuth tokens).
 
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::helpers::to_rfc3339;
 use super::oauth_provider_service;
+use crate::helpers::to_rfc3339;
 
 fn serialize_dt<S: serde::Serializer>(dt: &OffsetDateTime, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&to_rfc3339(*dt))
 }
-fn serialize_dt_opt<S: serde::Serializer>(dt: &Option<OffsetDateTime>, s: S) -> Result<S::Ok, S::Error> {
+fn serialize_dt_opt<S: serde::Serializer>(
+    dt: &Option<OffsetDateTime>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
     match dt {
         Some(d) => s.serialize_str(&to_rfc3339(*d)),
         None => s.serialize_none(),
@@ -87,7 +90,9 @@ pub async fn list_my_connections(
     user_subject: &str,
 ) -> Result<Vec<ConnectionResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<ConnectionResponse> = sqlx::query_as(
@@ -102,7 +107,9 @@ pub async fn list_my_connections(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await.map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     Ok(rows)
 }
 
@@ -115,10 +122,8 @@ pub async fn list_available(
     let providers = oauth_provider_service::list(db).await?;
     let connections = list_my_connections(db, tenant_id, user_subject).await?;
 
-    let connected_providers: std::collections::HashSet<String> = connections
-        .iter()
-        .map(|c| c.provider.clone())
-        .collect();
+    let connected_providers: std::collections::HashSet<String> =
+        connections.iter().map(|c| c.provider.clone()).collect();
 
     Ok(providers
         .into_iter()
@@ -142,7 +147,8 @@ pub async fn start_oauth_flow(
     provider_name: &str,
     redirect_base: &str,
 ) -> Result<String, CasperError> {
-    let provider = oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await?;
+    let provider =
+        oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await?;
 
     // Generate PKCE verifier and challenge
     let pkce_verifier = generate_random_string(64);
@@ -196,7 +202,8 @@ pub async fn handle_callback(
     let state_str = String::from_utf8(state_bytes)
         .map_err(|_| CasperError::BadRequest("invalid state encoding".into()))?;
 
-    let decrypted = vault.decrypt_value(casper_base::TenantId(Uuid::nil()), &state_str)
+    let decrypted = vault
+        .decrypt_value(casper_base::TenantId(Uuid::nil()), &state_str)
         .map_err(|_| CasperError::BadRequest("invalid or expired state parameter".into()))?;
     let state: OAuthState = serde_json::from_slice(decrypted.expose())
         .map_err(|_| CasperError::BadRequest("corrupted state parameter".into()))?;
@@ -205,7 +212,8 @@ pub async fn handle_callback(
     let tenant_id = TenantId(state.tenant_id);
 
     // Load provider config
-    let provider = oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await?;
+    let provider =
+        oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await?;
 
     let callback_url = format!("{redirect_base}/api/v1/connections/callback");
 
@@ -226,23 +234,31 @@ pub async fn handle_callback(
 
     if !token_resp.status().is_success() {
         let body = token_resp.text().await.unwrap_or_default();
-        return Err(CasperError::BadGateway(format!("token exchange error: {body}")));
+        return Err(CasperError::BadGateway(format!(
+            "token exchange error: {body}"
+        )));
     }
 
-    let tokens: TokenResponse = token_resp.json().await
+    let tokens: TokenResponse = token_resp
+        .json()
+        .await
         .map_err(|e| CasperError::BadGateway(format!("invalid token response: {e}")))?;
 
     // Encrypt tokens
     let access_token_enc = vault.encrypt_value(tenant_id, tokens.access_token.as_bytes())?;
-    let refresh_token_enc = tokens.refresh_token.as_ref()
+    let refresh_token_enc = tokens
+        .refresh_token
+        .as_ref()
         .map(|rt| vault.encrypt_value(tenant_id, rt.as_bytes()))
         .transpose()?;
 
-    let expires_at = tokens.expires_in.map(|secs| {
-        OffsetDateTime::now_utc() + time::Duration::seconds(secs)
-    });
+    let expires_at = tokens
+        .expires_in
+        .map(|secs| OffsetDateTime::now_utc() + time::Duration::seconds(secs));
 
-    let granted_scopes = tokens.scope.unwrap_or_else(|| provider.default_scopes.clone());
+    let granted_scopes = tokens
+        .scope
+        .unwrap_or_else(|| provider.default_scopes.clone());
 
     // Upsert connection
     let id = Uuid::now_v7();
@@ -282,7 +298,9 @@ pub async fn disconnect(
     provider_name: &str,
 ) -> Result<(), CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Load the connection to attempt token revocation
@@ -299,15 +317,20 @@ pub async fn disconnect(
 
     if row.is_none() {
         tx.commit().await.ok();
-        return Err(CasperError::NotFound(format!("connection to '{provider_name}'")));
+        return Err(CasperError::NotFound(format!(
+            "connection to '{provider_name}'"
+        )));
     }
 
     // Best-effort token revocation
-    if let Ok(provider) = oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await {
+    if let Ok(provider) =
+        oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await
+    {
         if let Some(ref revocation_url) = provider.revocation_url {
             if let Some((ref access_enc, _)) = row {
                 if let Ok(token) = vault.decrypt_value(tenant_id, access_enc) {
-                    let _ = http_client.post(revocation_url)
+                    let _ = http_client
+                        .post(revocation_url)
                         .form(&[("token", token.expose_str().unwrap_or(""))])
                         .send()
                         .await;
@@ -327,7 +350,9 @@ pub async fn disconnect(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await.map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     Ok(())
 }
 
@@ -337,7 +362,9 @@ pub async fn list_all(
     tenant_id: TenantId,
 ) -> Result<Vec<AdminConnectionResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<AdminConnectionResponse> = sqlx::query_as(
@@ -351,7 +378,9 @@ pub async fn list_all(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await.map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
     Ok(rows)
 }
 
@@ -399,10 +428,12 @@ pub async fn resolve_user_token(
         })?;
 
         let refresh_token = vault.decrypt_value(tenant_id, &refresh_token_enc)?;
-        let refresh_str = refresh_token.expose_str()
+        let refresh_str = refresh_token
+            .expose_str()
             .map_err(|e| CasperError::Internal(format!("invalid refresh token: {e}")))?;
 
-        let provider = oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await?;
+        let provider =
+            oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await?;
 
         let token_resp = http_client
             .post(&provider.token_url)
@@ -424,14 +455,20 @@ pub async fn resolve_user_token(
             )));
         }
 
-        let tokens: TokenResponse = token_resp.json().await
+        let tokens: TokenResponse = token_resp
+            .json()
+            .await
             .map_err(|e| CasperError::BadGateway(format!("invalid refresh response: {e}")))?;
 
         let new_access_enc = vault.encrypt_value(tenant_id, tokens.access_token.as_bytes())?;
-        let new_refresh_enc = tokens.refresh_token.as_ref()
+        let new_refresh_enc = tokens
+            .refresh_token
+            .as_ref()
             .map(|rt| vault.encrypt_value(tenant_id, rt.as_bytes()))
             .transpose()?;
-        let new_expires = tokens.expires_in.map(|s| OffsetDateTime::now_utc() + time::Duration::seconds(s));
+        let new_expires = tokens
+            .expires_in
+            .map(|s| OffsetDateTime::now_utc() + time::Duration::seconds(s));
 
         sqlx::query(
             "UPDATE user_connections SET access_token_enc = $1, refresh_token_enc = COALESCE($2, refresh_token_enc),
@@ -452,7 +489,8 @@ pub async fn resolve_user_token(
     }
 
     let access_token = vault.decrypt_value(tenant_id, &access_enc)?;
-    Ok(access_token.expose_str()
+    Ok(access_token
+        .expose_str()
         .map_err(|e| CasperError::Internal(format!("invalid access token: {e}")))?
         .to_string())
 }
@@ -465,9 +503,13 @@ fn generate_random_string(len: usize) -> String {
     (0..len)
         .map(|_| {
             let idx = rng.random_range(0..62);
-            let c = if idx < 10 { (b'0' + idx) as char }
-                else if idx < 36 { (b'a' + idx - 10) as char }
-                else { (b'A' + idx - 36) as char };
+            let c = if idx < 10 {
+                (b'0' + idx) as char
+            } else if idx < 36 {
+                (b'a' + idx - 10) as char
+            } else {
+                (b'A' + idx - 36) as char
+            };
             c
         })
         .collect()

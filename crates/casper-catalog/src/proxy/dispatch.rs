@@ -1,5 +1,5 @@
-use casper_base::CasperError;
 use crate::{ResolvedBackend, ResolvedDeployment};
+use casper_base::CasperError;
 use tokio::sync::mpsc;
 
 use super::types::{LlmRequest, LlmResponse, StreamEvent};
@@ -11,20 +11,14 @@ pub async fn dispatch(
     backend: &ResolvedBackend,
     request: &LlmRequest,
 ) -> Result<LlmResponse, CasperError> {
-    let api_key = backend
-        .api_key_enc
-        .as_deref()
-        .unwrap_or("");
+    let api_key = backend.api_key_enc.as_deref().unwrap_or("");
 
-    let base_url = backend
-        .base_url
-        .as_deref()
-        .ok_or_else(|| {
-            CasperError::Internal(format!(
-                "backend '{}' has no base_url configured",
-                backend.name
-            ))
-        })?;
+    let base_url = backend.base_url.as_deref().ok_or_else(|| {
+        CasperError::Internal(format!(
+            "backend '{}' has no base_url configured",
+            backend.name
+        ))
+    })?;
 
     match backend.provider.as_str() {
         "anthropic" => super::anthropic::call(client, base_url, api_key, request).await,
@@ -32,11 +26,9 @@ pub async fn dispatch(
         "openai" | "openai_compatible" => {
             super::openai::call(client, base_url, api_key, request).await
         }
-        "agent" => {
-            Err(CasperError::Internal(
-                "agent backends must be dispatched via AgentBackendRegistry".into(),
-            ))
-        }
+        "agent" => Err(CasperError::Internal(
+            "agent backends must be dispatched via AgentBackendRegistry".into(),
+        )),
         other => Err(CasperError::Internal(format!(
             "unsupported provider: {other}"
         ))),
@@ -61,8 +53,7 @@ pub async fn dispatch_with_retry<'a>(
 
         for attempt in 0..=deployment.retry_attempts {
             if attempt > 0 {
-                let delay_ms =
-                    deployment.retry_backoff_ms as u64 * (1u64 << (attempt as u64 - 1));
+                let delay_ms = deployment.retry_backoff_ms as u64 * (1u64 << (attempt as u64 - 1));
                 tracing::debug!(
                     attempt,
                     delay_ms,
@@ -110,9 +101,7 @@ pub async fn dispatch_with_retry<'a>(
         );
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        CasperError::Unavailable("all backends exhausted".into())
-    }))
+    Err(last_error.unwrap_or_else(|| CasperError::Unavailable("all backends exhausted".into())))
 }
 
 /// Streaming dispatch to a single backend.
@@ -124,23 +113,34 @@ pub async fn dispatch_stream(
 ) -> Result<LlmResponse, CasperError> {
     let api_key = backend.api_key_enc.as_deref().unwrap_or("");
     let base_url = backend.base_url.as_deref().ok_or_else(|| {
-        CasperError::Internal(format!("backend '{}' has no base_url configured", backend.name))
+        CasperError::Internal(format!(
+            "backend '{}' has no base_url configured",
+            backend.name
+        ))
     })?;
 
     match backend.provider.as_str() {
         "anthropic" => super::anthropic::call_stream(client, base_url, api_key, request, tx).await,
-        "azure_openai" => super::openai::call_stream_azure(client, base_url, api_key, request, tx).await,
+        "azure_openai" => {
+            super::openai::call_stream_azure(client, base_url, api_key, request, tx).await
+        }
         "openai" | "openai_compatible" => {
             super::openai::call_stream(client, base_url, api_key, request, tx).await
         }
         "agent" => {
             let response = dispatch(client, backend, request).await?;
             if !response.content.is_empty() {
-                let _ = tx.send(StreamEvent::ContentDelta { delta: response.content.clone() }).await;
+                let _ = tx
+                    .send(StreamEvent::ContentDelta {
+                        delta: response.content.clone(),
+                    })
+                    .await;
             }
             Ok(response)
         }
-        other => Err(CasperError::Internal(format!("unsupported provider: {other}"))),
+        other => Err(CasperError::Internal(format!(
+            "unsupported provider: {other}"
+        ))),
     }
 }
 
@@ -161,7 +161,9 @@ pub async fn dispatch_stream_with_retry<'a>(
             let mut count = 0u64;
             while let Some(event) = inner_rx.recv().await {
                 count += 1;
-                if outer_tx.send(event).await.is_err() { break; }
+                if outer_tx.send(event).await.is_err() {
+                    break;
+                }
             }
             count
         });
@@ -179,7 +181,9 @@ pub async fn dispatch_stream_with_retry<'a>(
                 }
 
                 last_error = Some(e);
-                if !deployment.fallback_enabled { break; }
+                if !deployment.fallback_enabled {
+                    break;
+                }
             }
         }
     }
@@ -215,7 +219,9 @@ mod tests {
         assert!(!is_non_retryable(&CasperError::RateLimited));
         assert!(!is_non_retryable(&CasperError::BadGateway("err".into())));
         assert!(!is_non_retryable(&CasperError::Unavailable("err".into())));
-        assert!(!is_non_retryable(&CasperError::GatewayTimeout("err".into())));
+        assert!(!is_non_retryable(&CasperError::GatewayTimeout(
+            "err".into()
+        )));
         assert!(!is_non_retryable(&CasperError::Internal("err".into())));
     }
 }

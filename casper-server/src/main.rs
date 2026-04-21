@@ -6,13 +6,15 @@ mod routes;
 pub mod services;
 pub mod ws;
 
-use std::sync::Arc;
 use axum::{Json, Router, extract::State, middleware, routing::get};
-use casper_base::{JwtSigner, JwtVerifier, RevocationCache, AuditWriter, RuntimeMetrics, UsageRecorder};
+use casper_base::{
+    AuditWriter, JwtSigner, JwtVerifier, RevocationCache, RuntimeMetrics, UsageRecorder,
+};
 use dashmap::DashMap;
 use serde_json::json;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -26,7 +28,7 @@ use routes::auth_routes::auth_router;
 pub struct AppState {
     pub config: Arc<ServerConfig>,
     pub db: PgPool,
-    pub db_owner: PgPool,  // Bypasses RLS (table owner)
+    pub db_owner: PgPool, // Bypasses RLS (table owner)
     pub analytics_db: PgPool,
     pub audit: AuditWriter,
     pub usage: UsageRecorder,
@@ -70,27 +72,44 @@ async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>>
         "CREATE TABLE IF NOT EXISTS _migrations (
             name TEXT PRIMARY KEY,
             applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )"
+        )",
     )
     .execute(pool)
     .await?;
 
     let migration_files = [
-        ("0001_platform", include_str!("../../migrations/0001_platform.sql")),
-        ("0002_tenant", include_str!("../../migrations/0002_tenant.sql")),
-        ("0003_agent_backends", include_str!("../../migrations/0003_agent_backends.sql")),
-        ("0004_deployment_fallback", include_str!("../../migrations/0004_deployment_fallback.sql")),
-        ("0005_user_connections", include_str!("../../migrations/0005_user_connections.sql")),
-        ("0006_mcp_oauth", include_str!("../../migrations/0006_mcp_oauth.sql")),
+        (
+            "0001_platform",
+            include_str!("../../migrations/0001_platform.sql"),
+        ),
+        (
+            "0002_tenant",
+            include_str!("../../migrations/0002_tenant.sql"),
+        ),
+        (
+            "0003_agent_backends",
+            include_str!("../../migrations/0003_agent_backends.sql"),
+        ),
+        (
+            "0004_deployment_fallback",
+            include_str!("../../migrations/0004_deployment_fallback.sql"),
+        ),
+        (
+            "0005_user_connections",
+            include_str!("../../migrations/0005_user_connections.sql"),
+        ),
+        (
+            "0006_mcp_oauth",
+            include_str!("../../migrations/0006_mcp_oauth.sql"),
+        ),
     ];
 
     for (name, sql) in migration_files {
-        let already_applied: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = $1)"
-        )
-        .bind(name)
-        .fetch_one(pool)
-        .await?;
+        let already_applied: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = $1)")
+                .bind(name)
+                .fetch_one(pool)
+                .await?;
 
         if !already_applied {
             tracing::info!("Running migration: {name}");
@@ -116,15 +135,14 @@ fn setup_signing_keys(config: &ServerConfig) -> (Option<Arc<JwtSigner>>, Option<
             .expect("failed to generate dev signing key");
         let pkcs8_bytes = pkcs8.as_ref();
 
-        let signer = JwtSigner::from_pkcs8_der(pkcs8_bytes)
-            .expect("failed to create JWT signer");
+        let signer = JwtSigner::from_pkcs8_der(pkcs8_bytes).expect("failed to create JWT signer");
 
         use ring::signature::KeyPair;
         let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes)
             .expect("failed to parse keypair");
         let pub_bytes: [u8; 32] = key_pair.public_key().as_ref().try_into().unwrap();
-        let verifier = JwtVerifier::from_public_key(&pub_bytes)
-            .expect("failed to create JWT verifier");
+        let verifier =
+            JwtVerifier::from_public_key(&pub_bytes).expect("failed to create JWT verifier");
 
         tracing::info!("Dev mode: using ephemeral signing keys");
         (Some(Arc::new(signer)), Some(Arc::new(verifier)))
@@ -157,12 +175,14 @@ fn setup_signing_keys(config: &ServerConfig) -> (Option<Arc<JwtSigner>>, Option<
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,sqlx=warn".parse().unwrap()))
+        .with(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,sqlx=warn".parse().unwrap()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config_path = std::env::var("CASPER_CONFIG")
-        .unwrap_or_else(|_| "config/casper-server.yaml".to_string());
+    let config_path =
+        std::env::var("CASPER_CONFIG").unwrap_or_else(|_| "config/casper-server.yaml".to_string());
     let config = ServerConfig::load(&config_path)?;
     tracing::info!("Loaded config from {config_path}");
 
@@ -178,7 +198,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Owner pool — bypasses RLS (for auth lookups, platform admin)
-    let owner_url = config.database.owner_url.as_deref().unwrap_or(&config.database.url);
+    let owner_url = config
+        .database
+        .owner_url
+        .as_deref()
+        .unwrap_or(&config.database.url);
     let owner_pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(owner_url)
@@ -208,10 +232,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if let Ok(b64) = std::env::var("CASPER_MASTER_KEY") {
             // Base64-encoded master key from environment (container deployments)
             use base64::Engine;
-            base64::engine::general_purpose::STANDARD.decode(&b64)
+            base64::engine::general_purpose::STANDARD
+                .decode(&b64)
                 .unwrap_or_else(|e| panic!("CASPER_MASTER_KEY is not valid base64: {e}"))
         } else if let Some(ref path) = config.auth.master_key_file {
-            std::fs::read(path).unwrap_or_else(|e| panic!("failed to read master key from {path}: {e}"))
+            std::fs::read(path)
+                .unwrap_or_else(|e| panic!("failed to read master key from {path}: {e}"))
         } else {
             tracing::warn!("No master key configured — vault encryption disabled, using dev key");
             b"casper-dev-master-key-not-secure!".to_vec()

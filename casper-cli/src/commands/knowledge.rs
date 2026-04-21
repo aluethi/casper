@@ -30,8 +30,8 @@ pub async fn handle(cmd: KnowledgeCmd) -> Result<(), String> {
                 .unwrap_or("upload")
                 .to_string();
 
-            let file_bytes = std::fs::read(&file)
-                .map_err(|e| format!("failed to read {file}: {e}"))?;
+            let file_bytes =
+                std::fs::read(&file).map_err(|e| format!("failed to read {file}: {e}"))?;
 
             let part = reqwest::multipart::Part::bytes(file_bytes)
                 .file_name(file_name)

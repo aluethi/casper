@@ -9,9 +9,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::auth::ScopeGuard;
 use crate::pagination::PaginationParams;
-use crate::services::model_service::{
-    self, CreateModelRequest, ModelResponse, UpdateModelRequest,
-};
+use crate::services::model_service::{self, CreateModelRequest, ModelResponse, UpdateModelRequest};
 
 // ── Handlers ───────────────────────────────────────────────────────
 

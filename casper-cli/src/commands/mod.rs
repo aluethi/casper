@@ -1,6 +1,6 @@
 pub mod agent;
-pub mod auth;
 pub mod audit;
+pub mod auth;
 pub mod conversations;
 pub mod deploy;
 pub mod keys;

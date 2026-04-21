@@ -1,4 +1,8 @@
-use axum::{Json, Router, extract::State, routing::{get, post}};
+use axum::{
+    Json, Router,
+    extract::State,
+    routing::{get, post},
+};
 use casper_base::CasperError;
 
 use crate::AppState;
@@ -36,12 +40,9 @@ async fn list_models(
     State(state): State<AppState>,
     guard: ScopeGuard,
 ) -> Result<Json<ModelsListResponse>, CasperError> {
-    let result = inference_service::list_models(
-        &state.db_owner,
-        guard.0.tenant_id.0,
-        &guard.0.scopes,
-    )
-    .await?;
+    let result =
+        inference_service::list_models(&state.db_owner, guard.0.tenant_id.0, &guard.0.scopes)
+            .await?;
     Ok(Json(result))
 }
 

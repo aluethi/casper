@@ -60,7 +60,9 @@ async fn set_outcome(
 ) -> Result<Json<ConversationResponse>, CasperError> {
     guard.require("agents:manage")?;
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let result = conversation_service::set_outcome(&state.db, tenant_id, id, &body, &guard.0.actor()).await?;
+    let result =
+        conversation_service::set_outcome(&state.db, tenant_id, id, &body, &guard.0.actor())
+            .await?;
     Ok(Json(result))
 }
 
@@ -73,5 +75,8 @@ pub fn conversation_router() -> Router<AppState> {
             "/api/v1/conversations/{id}",
             get(get_conversation).delete(delete_conversation),
         )
-        .route("/api/v1/conversations/{id}/outcome", axum::routing::patch(set_outcome))
+        .route(
+            "/api/v1/conversations/{id}/outcome",
+            axum::routing::patch(set_outcome),
+        )
 }

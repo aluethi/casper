@@ -48,8 +48,5 @@ async fn list_feedback(
 // ── Router ──────────────────────────────────────────────────────
 
 pub fn feedback_router() -> Router<AppState> {
-    Router::new().route(
-        "/api/v1/feedback",
-        post(create_feedback).get(list_feedback),
-    )
+    Router::new().route("/api/v1/feedback", post(create_feedback).get(list_feedback))
 }

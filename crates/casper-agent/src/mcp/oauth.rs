@@ -81,18 +81,17 @@ pub struct PkcePair {
 /// Probe an MCP server with an unauthenticated request.
 /// Returns the `resource_metadata` URL from the 401 `WWW-Authenticate` header,
 /// or `None` if the server doesn't require OAuth.
-pub async fn probe(
-    http: &reqwest::Client,
-    mcp_url: &str,
-) -> Result<Option<String>, McpError> {
+pub async fn probe(http: &reqwest::Client, mcp_url: &str) -> Result<Option<String>, McpError> {
     let resp = http
         .post(mcp_url)
         .header("content-type", "application/json")
-        .json(&json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": {"name": "casper", "version": "0.1.0"}
-        }}))
+        .json(
+            &json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "casper", "version": "0.1.0"}
+            }}),
+        )
         .send()
         .await
         .map_err(|e| McpError::Http(e))?;
@@ -103,7 +102,9 @@ pub async fn probe(
                 return Ok(parse_resource_metadata_url(header));
             }
         }
-        return Err(McpError::InvalidResponse("401 without WWW-Authenticate header".into()));
+        return Err(McpError::InvalidResponse(
+            "401 without WWW-Authenticate header".into(),
+        ));
     }
 
     // Server didn't return 401 — no OAuth needed
@@ -118,16 +119,22 @@ pub async fn fetch_prm(
     resource_metadata_url: &str,
     expected_origin: &str,
 ) -> Result<ProtectedResourceMetadata, McpError> {
-    let resp = http.get(resource_metadata_url).send().await
+    let resp = http
+        .get(resource_metadata_url)
+        .send()
+        .await
         .map_err(|e| McpError::InvalidResponse(format!("PRM fetch failed: {e}")))?;
 
     if !resp.status().is_success() {
         return Err(McpError::InvalidResponse(format!(
-            "PRM returned {}", resp.status()
+            "PRM returned {}",
+            resp.status()
         )));
     }
 
-    let prm: ProtectedResourceMetadata = resp.json().await
+    let prm: ProtectedResourceMetadata = resp
+        .json()
+        .await
         .map_err(|e| McpError::InvalidResponse(format!("invalid PRM JSON: {e}")))?;
 
     // Anti-phishing: resource must match the origin we're connecting to
@@ -143,7 +150,7 @@ pub async fn fetch_prm(
 
     if prm.authorization_servers.is_empty() {
         return Err(McpError::InvalidResponse(
-            "PRM has no authorization_servers".into()
+            "PRM has no authorization_servers".into(),
         ));
     }
 
@@ -160,13 +167,19 @@ pub async fn fetch_as_metadata(
     let base = as_issuer.trim_end_matches('/');
     let url = format!("{base}/.well-known/oauth-authorization-server");
 
-    let resp = http.get(&url).send().await
+    let resp = http
+        .get(&url)
+        .send()
+        .await
         .map_err(|e| McpError::InvalidResponse(format!("AS metadata fetch failed: {e}")))?;
 
     if !resp.status().is_success() {
         // Fall back to OpenID Connect discovery
         let oidc_url = format!("{base}/.well-known/openid-configuration");
-        let resp2 = http.get(&oidc_url).send().await
+        let resp2 = http
+            .get(&oidc_url)
+            .send()
+            .await
             .map_err(|e| McpError::InvalidResponse(format!("AS metadata fetch failed: {e}")))?;
 
         if !resp2.status().is_success() {
@@ -175,19 +188,25 @@ pub async fn fetch_as_metadata(
             )));
         }
 
-        return resp2.json().await
+        return resp2
+            .json()
+            .await
             .map_err(|e| McpError::InvalidResponse(format!("invalid AS metadata: {e}")));
     }
 
-    let meta: AuthServerMetadata = resp.json().await
+    let meta: AuthServerMetadata = resp
+        .json()
+        .await
         .map_err(|e| McpError::InvalidResponse(format!("invalid AS metadata: {e}")))?;
 
     // OAuth 2.1 requires PKCE with S256
     if !meta.code_challenge_methods_supported.is_empty()
-        && !meta.code_challenge_methods_supported.contains(&"S256".to_string())
+        && !meta
+            .code_challenge_methods_supported
+            .contains(&"S256".to_string())
     {
         return Err(McpError::InvalidResponse(
-            "AS does not support S256 PKCE — required by OAuth 2.1".into()
+            "AS does not support S256 PKCE — required by OAuth 2.1".into(),
         ));
     }
 
@@ -242,7 +261,8 @@ pub async fn register_client(
         return Err(McpError::InvalidResponse(format!("DCR failed: {body}")));
     }
 
-    resp.json().await
+    resp.json()
+        .await
         .map_err(|e| McpError::InvalidResponse(format!("invalid DCR response: {e}")))
 }
 
@@ -250,15 +270,18 @@ pub async fn register_client(
 
 /// Generate a PKCE pair (S256).
 pub fn pkce_pair() -> PkcePair {
-    use sha2::Digest;
     use base64::Engine;
+    use sha2::Digest;
 
     let verifier_bytes: [u8; 32] = rand::random();
     let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(verifier_bytes);
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(sha2::Sha256::digest(verifier.as_bytes()));
 
-    PkcePair { verifier, challenge }
+    PkcePair {
+        verifier,
+        challenge,
+    }
 }
 
 /// Generate a random state string for CSRF protection.
@@ -319,10 +342,13 @@ pub async fn exchange_code(
 
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(McpError::InvalidResponse(format!("token exchange error: {body}")));
+        return Err(McpError::InvalidResponse(format!(
+            "token exchange error: {body}"
+        )));
     }
 
-    resp.json().await
+    resp.json()
+        .await
         .map_err(|e| McpError::InvalidResponse(format!("invalid token response: {e}")))
 }
 
@@ -350,10 +376,13 @@ pub async fn refresh_token(
 
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(McpError::InvalidResponse(format!("token refresh error: {body}")));
+        return Err(McpError::InvalidResponse(format!(
+            "token refresh error: {body}"
+        )));
     }
 
-    resp.json().await
+    resp.json()
+        .await
         .map_err(|e| McpError::InvalidResponse(format!("invalid refresh response: {e}")))
 }
 
@@ -397,8 +426,14 @@ mod tests {
 
     #[test]
     fn mcp_provider_key_from_url() {
-        assert_eq!(mcp_provider_key("https://asana-mcp.example.com/mcp"), "mcp:asana-mcp.example.com");
-        assert_eq!(mcp_provider_key("https://mcp.ventoo.ai/apps/mcp"), "mcp:mcp.ventoo.ai");
+        assert_eq!(
+            mcp_provider_key("https://asana-mcp.example.com/mcp"),
+            "mcp:asana-mcp.example.com"
+        );
+        assert_eq!(
+            mcp_provider_key("https://mcp.ventoo.ai/apps/mcp"),
+            "mcp:mcp.ventoo.ai"
+        );
     }
 
     #[test]

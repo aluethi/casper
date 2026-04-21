@@ -8,8 +8,12 @@ pub struct PaginationParams {
     pub per_page: i64,
 }
 
-fn default_page() -> i64 { 1 }
-fn default_per_page() -> i64 { 50 }
+fn default_page() -> i64 {
+    1
+}
+fn default_per_page() -> i64 {
+    50
+}
 
 impl PaginationParams {
     pub fn offset(&self) -> i64 {

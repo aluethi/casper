@@ -25,9 +25,9 @@ use uuid::Uuid;
 use crate::actor::{AgentResponse, AgentUsage};
 use crate::tools::{ToolContext, ToolDispatcher};
 
-pub use llm::{LlmCaller, RealLlmCaller};
 #[cfg(test)]
 pub use llm::MockLlmCaller;
+pub use llm::{LlmCaller, RealLlmCaller};
 
 /// Maximum number of ReAct loop iterations before we bail out.
 const DEFAULT_MAX_TURNS: usize = 25;
@@ -50,7 +50,13 @@ struct AgentConfig {
 }
 
 /// Row type for the agent config query.
-type AgentConfigRow = (String, Option<String>, serde_json::Value, serde_json::Value, serde_json::Value);
+type AgentConfigRow = (
+    String,
+    Option<String>,
+    serde_json::Value,
+    serde_json::Value,
+    serde_json::Value,
+);
 
 // ── Agent engine ─────────────────────────────────────────────────
 
@@ -135,10 +141,8 @@ impl AgentEngine {
         let max_turns = (config.max_turns as usize).min(DEFAULT_MAX_TURNS);
 
         // 2. Build tool dispatcher from agent's tools config (registers built-in + MCP tools)
-        let dynamic_dispatcher = crate::tools::build_dispatcher(
-            &config.tools,
-            &self.http_client,
-        ).await;
+        let dynamic_dispatcher =
+            crate::tools::build_dispatcher(&config.tools, &self.http_client).await;
         // Use the dynamically built dispatcher if it has tools, otherwise fall back
         // to the pre-built one (allows callers to pre-register tools if needed).
         let active_dispatcher = if !dynamic_dispatcher.is_empty() {
@@ -158,7 +162,8 @@ impl AgentEngine {
             &config.tenant_name,
             &self.db,
             &mcp_summaries,
-        ).await;
+        )
+        .await;
         let system_prompt = config.system_prompt.clone();
         let tool_defs = active_dispatcher.tool_definitions();
 
@@ -176,9 +181,8 @@ impl AgentEngine {
         let mut messages: Vec<Message> = history
             .into_iter()
             .filter_map(|h| {
-                let role: MessageRole = serde_json::from_value(
-                    serde_json::Value::String(h.role.clone()),
-                ).ok()?;
+                let role: MessageRole =
+                    serde_json::from_value(serde_json::Value::String(h.role.clone())).ok()?;
                 Some(Message {
                     role,
                     content: h.content,
@@ -308,10 +312,7 @@ impl AgentEngine {
                         .get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
-                    let tool_id = tc
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
+                    let tool_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
                     let tool_input: serde_json::Value = func
                         .get("arguments")
                         .and_then(|v| v.as_str())
@@ -330,7 +331,9 @@ impl AgentEngine {
 
                     // Intercept delegation sentinel — execute the child agent
                     if let Ok(ref result) = tool_result {
-                        if result.content.get("__delegate__").and_then(|v| v.as_bool()) == Some(true) {
+                        if result.content.get("__delegate__").and_then(|v| v.as_bool())
+                            == Some(true)
+                        {
                             let target = result.content["agent"].as_str().unwrap_or("");
                             let child_msg = result.content["message"].as_str().unwrap_or("");
 
@@ -345,15 +348,17 @@ impl AgentEngine {
                                 .and_then(|c| c["max_depth"].as_u64())
                                 .unwrap_or(3) as u32;
 
-                            tool_result = Ok(self.execute_delegation(
-                                target,
-                                child_msg,
-                                tenant_id,
-                                agent_name,
-                                correlation_id,
-                                timeout_secs,
-                                max_depth,
-                            ).await);
+                            tool_result = Ok(self
+                                .execute_delegation(
+                                    target,
+                                    child_msg,
+                                    tenant_id,
+                                    agent_name,
+                                    correlation_id,
+                                    timeout_secs,
+                                    max_depth,
+                                )
+                                .await);
                         }
                     }
 
@@ -366,8 +371,11 @@ impl AgentEngine {
                             if result.is_error {
                                 (format!("Error: {}", result.content), true)
                             } else {
-                                (serde_json::to_string(&result.content)
-                                    .unwrap_or_else(|_| result.content.to_string()), false)
+                                (
+                                    serde_json::to_string(&result.content)
+                                        .unwrap_or_else(|_| result.content.to_string()),
+                                    false,
+                                )
                             }
                         }
                         Err(e) => {
@@ -499,10 +507,8 @@ impl AgentEngine {
         let mut config = self.load_agent_config(tenant_id, agent_name).await?;
         let max_turns = (config.max_turns as usize).min(DEFAULT_MAX_TURNS);
 
-        let dynamic_dispatcher = crate::tools::build_dispatcher(
-            &config.tools,
-            &self.http_client,
-        ).await;
+        let dynamic_dispatcher =
+            crate::tools::build_dispatcher(&config.tools, &self.http_client).await;
         let active_dispatcher = if !dynamic_dispatcher.is_empty() {
             &dynamic_dispatcher
         } else {
@@ -519,22 +525,26 @@ impl AgentEngine {
             &config.tenant_name,
             &self.db,
             &mcp_summaries,
-        ).await;
+        )
+        .await;
         let system_prompt = config.system_prompt.clone();
         let tool_defs = active_dispatcher.tool_definitions();
 
         // Load history + append user message
-        let history = crate::prompt::load_conversation_history(
-            &self.db, tenant_id, conversation_id, 8000,
-        ).await.map_err(|e| CasperError::Internal(format!("Failed to load history: {e}")))?;
+        let history =
+            crate::prompt::load_conversation_history(&self.db, tenant_id, conversation_id, 8000)
+                .await
+                .map_err(|e| CasperError::Internal(format!("Failed to load history: {e}")))?;
 
         let mut messages: Vec<Message> = history
             .into_iter()
             .filter_map(|h| {
-                let role: MessageRole = serde_json::from_value(
-                    serde_json::Value::String(h.role.clone()),
-                ).ok()?;
-                Some(Message { role, content: h.content })
+                let role: MessageRole =
+                    serde_json::from_value(serde_json::Value::String(h.role.clone())).ok()?;
+                Some(Message {
+                    role,
+                    content: h.content,
+                })
             })
             .collect();
 
@@ -543,12 +553,21 @@ impl AgentEngine {
             content: serde_json::Value::String(user_message.to_string()),
         });
 
-        self.store_message(tenant_id, conversation_id, "user",
-            &serde_json::Value::String(user_message.to_string()), author).await?;
+        self.store_message(
+            tenant_id,
+            conversation_id,
+            "user",
+            &serde_json::Value::String(user_message.to_string()),
+            author,
+        )
+        .await?;
 
         let tool_ctx = ToolContext {
-            tenant_id, agent_name: agent_name.to_string(),
-            conversation_id, correlation_id, db: self.db.clone(),
+            tenant_id,
+            agent_name: agent_name.to_string(),
+            conversation_id,
+            correlation_id,
+            db: self.db.clone(),
             invoking_user: Some(author.to_string()),
             token_resolver: None,
         };
@@ -570,12 +589,19 @@ impl AgentEngine {
                 max_tokens: Some(config.max_tokens),
                 temperature: Some(config.temperature),
                 stream: true,
-                tools: if tool_defs.is_empty() { None } else { Some(tool_defs.clone()) },
+                tools: if tool_defs.is_empty() {
+                    None
+                } else {
+                    Some(tool_defs.clone())
+                },
                 extra: json!({ "system": system_prompt }),
             };
 
             // Stream LLM call — thinking and content deltas flow through tx
-            let (response, backend_id) = self.llm_caller.call_stream(tenant_id, &request, tx.clone()).await?;
+            let (response, backend_id) = self
+                .llm_caller
+                .call_stream(tenant_id, &request, tx.clone())
+                .await?;
 
             usage.input_tokens += response.input_tokens;
             usage.output_tokens += response.output_tokens;
@@ -583,10 +609,20 @@ impl AgentEngine {
             usage.cache_write_tokens += response.cache_write_tokens.unwrap_or(0);
             usage.llm_calls += 1;
 
-            self.record_usage(tenant_id, agent_name, &config.deployment_slug,
-                &response, backend_id, correlation_id).await;
+            self.record_usage(
+                tenant_id,
+                agent_name,
+                &config.deployment_slug,
+                &response,
+                backend_id,
+                correlation_id,
+            )
+            .await;
 
-            let has_tools = response.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
+            let has_tools = response
+                .tool_calls
+                .as_ref()
+                .is_some_and(|tc| !tc.is_empty());
 
             if has_tools {
                 let tool_calls = response.tool_calls.as_ref().unwrap();
@@ -602,14 +638,23 @@ impl AgentEngine {
                     content: json!({ "content": assistant_content, "tool_calls": tool_calls }),
                 };
                 messages.push(assistant_msg.clone());
-                self.store_message(tenant_id, conversation_id, "assistant",
-                    &assistant_msg.content, agent_name).await?;
+                self.store_message(
+                    tenant_id,
+                    conversation_id,
+                    "assistant",
+                    &assistant_msg.content,
+                    agent_name,
+                )
+                .await?;
 
                 let mut step_tool_calls: Vec<crate::actor::ToolCallStep> = Vec::new();
 
                 for tc in tool_calls {
                     let func = &tc["function"];
-                    let tool_name = func.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let tool_name = func
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
                     let tool_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
                     let tool_input: serde_json::Value = func
                         .get("arguments")
@@ -618,41 +663,67 @@ impl AgentEngine {
                         .unwrap_or(json!({}));
 
                     let mut tool_result = active_dispatcher
-                        .dispatch(tool_name, tool_input.clone(), &tool_ctx).await;
+                        .dispatch(tool_name, tool_input.clone(), &tool_ctx)
+                        .await;
 
                     // Handle delegation sentinel
                     if let Ok(ref result) = tool_result {
-                        if result.content.get("__delegate__").and_then(|v| v.as_bool()) == Some(true) {
+                        if result.content.get("__delegate__").and_then(|v| v.as_bool())
+                            == Some(true)
+                        {
                             let target = result.content["agent"].as_str().unwrap_or("");
                             let child_msg = result.content["message"].as_str().unwrap_or("");
-                            let delegate_cfg = config.tools["builtin"].as_array()
+                            let delegate_cfg = config.tools["builtin"]
+                                .as_array()
                                 .and_then(|arr| arr.iter().find(|e| e["name"] == "delegate"));
-                            let timeout_secs = delegate_cfg.and_then(|c| c["timeout_secs"].as_u64()).unwrap_or(300);
-                            let max_depth = delegate_cfg.and_then(|c| c["max_depth"].as_u64()).unwrap_or(3) as u32;
-                            tool_result = Ok(self.execute_delegation(
-                                target, child_msg, tenant_id, agent_name,
-                                correlation_id, timeout_secs, max_depth,
-                            ).await);
+                            let timeout_secs = delegate_cfg
+                                .and_then(|c| c["timeout_secs"].as_u64())
+                                .unwrap_or(300);
+                            let max_depth = delegate_cfg
+                                .and_then(|c| c["max_depth"].as_u64())
+                                .unwrap_or(3) as u32;
+                            tool_result = Ok(self
+                                .execute_delegation(
+                                    target,
+                                    child_msg,
+                                    tenant_id,
+                                    agent_name,
+                                    correlation_id,
+                                    timeout_secs,
+                                    max_depth,
+                                )
+                                .await);
                         }
                     }
 
                     // Handle ask_user sentinel — pause and wait for user input
                     if let Ok(ref result) = tool_result {
-                        if result.content.get("__ask_user__").and_then(|v| v.as_bool()) == Some(true) {
-                            let question = result.content["question"].as_str().unwrap_or("").to_string();
+                        if result.content.get("__ask_user__").and_then(|v| v.as_bool())
+                            == Some(true)
+                        {
+                            let question = result.content["question"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string();
                             let options: Vec<String> = result.content["options"]
                                 .as_array()
-                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
                                 .unwrap_or_default();
 
                             let question_id = Uuid::now_v7().to_string();
 
                             // Send the question to the client
-                            let _ = tx.send(StreamEvent::AskUser {
-                                question_id: question_id.clone(),
-                                question: question.clone(),
-                                options: options.clone(),
-                            }).await;
+                            let _ = tx
+                                .send(StreamEvent::AskUser {
+                                    question_id: question_id.clone(),
+                                    question: question.clone(),
+                                    options: options.clone(),
+                                })
+                                .await;
 
                             tracing::info!(
                                 agent = %agent_name,
@@ -665,7 +736,8 @@ impl AgentEngine {
                             let answer = tokio::time::timeout(
                                 std::time::Duration::from_secs(300),
                                 ask_rx.recv(),
-                            ).await;
+                            )
+                            .await;
 
                             let answer_text = match answer {
                                 Ok(Some(text)) => text,
@@ -692,14 +764,17 @@ impl AgentEngine {
                         if err_msg.contains("has not connected") {
                             // Extract the provider name from the error
                             let provider = err_msg
-                                .split('\'').nth(3)  // "...has not connected '<provider>'..."
+                                .split('\'')
+                                .nth(3) // "...has not connected '<provider>'..."
                                 .unwrap_or("unknown")
                                 .to_string();
 
-                            let _ = tx.send(StreamEvent::ConnectRequired {
-                                provider: provider.clone(),
-                                display_name: provider.clone(),
-                            }).await;
+                            let _ = tx
+                                .send(StreamEvent::ConnectRequired {
+                                    provider: provider.clone(),
+                                    display_name: provider.clone(),
+                                })
+                                .await;
 
                             tracing::info!(
                                 agent = %agent_name,
@@ -711,14 +786,16 @@ impl AgentEngine {
                             let connected = tokio::time::timeout(
                                 std::time::Duration::from_secs(300),
                                 ask_rx.recv(),
-                            ).await;
+                            )
+                            .await;
 
                             match connected {
                                 Ok(Some(_)) => {
                                     // Retry the tool call now that the user is connected
                                     tracing::info!(agent = %agent_name, provider = %provider, "user connected, retrying tool");
                                     tool_result = active_dispatcher
-                                        .dispatch(tool_name, tool_input.clone(), &tool_ctx).await;
+                                        .dispatch(tool_name, tool_input.clone(), &tool_ctx)
+                                        .await;
                                 }
                                 _ => {
                                     tool_result = Ok(crate::tools::ToolResult::error(format!(
@@ -731,38 +808,54 @@ impl AgentEngine {
 
                     // Handle MCP OAuth 2.1 required sentinel
                     if let Ok(ref result) = tool_result {
-                        if result.content.get("__mcp_oauth_required__").and_then(|v| v.as_bool()) == Some(true) {
-                            let mcp_url = result.content["mcp_server_url"].as_str().unwrap_or("").to_string();
+                        if result
+                            .content
+                            .get("__mcp_oauth_required__")
+                            .and_then(|v| v.as_bool())
+                            == Some(true)
+                        {
+                            let mcp_url = result.content["mcp_server_url"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string();
 
                             // Try to start the OAuth flow via the token resolver
-                            let auth_url = if let (Some(user), Some(resolver)) =
-                                (tool_ctx.invoking_user.as_deref(), tool_ctx.token_resolver.as_ref())
-                            {
-                                resolver.start_mcp_oauth_flow(tenant_id, user, &mcp_url).await.ok()
+                            let auth_url = if let (Some(user), Some(resolver)) = (
+                                tool_ctx.invoking_user.as_deref(),
+                                tool_ctx.token_resolver.as_ref(),
+                            ) {
+                                resolver
+                                    .start_mcp_oauth_flow(tenant_id, user, &mcp_url)
+                                    .await
+                                    .ok()
                             } else {
                                 None
                             };
 
                             if let Some(auth_url) = auth_url {
-                                let _ = tx.send(StreamEvent::McpOAuthRequired {
-                                    mcp_server_url: mcp_url.clone(),
-                                    authorization_url: auth_url,
-                                }).await;
+                                let _ = tx
+                                    .send(StreamEvent::McpOAuthRequired {
+                                        mcp_server_url: mcp_url.clone(),
+                                        authorization_url: auth_url,
+                                    })
+                                    .await;
 
                                 // Wait for user to complete OAuth
                                 let connected = tokio::time::timeout(
                                     std::time::Duration::from_secs(300),
                                     ask_rx.recv(),
-                                ).await;
+                                )
+                                .await;
 
                                 match connected {
                                     Ok(Some(_)) => {
                                         tool_result = active_dispatcher
-                                            .dispatch(tool_name, tool_input.clone(), &tool_ctx).await;
+                                            .dispatch(tool_name, tool_input.clone(), &tool_ctx)
+                                            .await;
                                     }
                                     _ => {
                                         tool_result = Ok(crate::tools::ToolResult::error(
-                                            "User did not complete MCP OAuth within the timeout."
+                                            "User did not complete MCP OAuth within the timeout.",
                                         ));
                                     }
                                 }
@@ -781,20 +874,25 @@ impl AgentEngine {
                             if result.is_error {
                                 (format!("Error: {}", result.content), true)
                             } else {
-                                (serde_json::to_string(&result.content)
-                                    .unwrap_or_else(|_| result.content.to_string()), false)
+                                (
+                                    serde_json::to_string(&result.content)
+                                        .unwrap_or_else(|_| result.content.to_string()),
+                                    false,
+                                )
                             }
                         }
                         Err(e) => (format!("Tool error: {e}"), true),
                     };
 
                     // Stream tool result event
-                    let _ = tx.send(StreamEvent::ToolResult {
-                        id: tool_id.to_string(),
-                        name: tool_name.to_string(),
-                        content: result_str.clone(),
-                        is_error,
-                    }).await;
+                    let _ = tx
+                        .send(StreamEvent::ToolResult {
+                            id: tool_id.to_string(),
+                            name: tool_name.to_string(),
+                            content: result_str.clone(),
+                            is_error,
+                        })
+                        .await;
 
                     step_tool_calls.push(crate::actor::ToolCallStep {
                         name: tool_name.to_string(),
@@ -808,12 +906,19 @@ impl AgentEngine {
                         content: json!({ "tool_call_id": tool_id, "content": result_str }),
                     };
                     messages.push(tool_msg.clone());
-                    self.store_message(tenant_id, conversation_id, "tool",
-                        &tool_msg.content, agent_name).await?;
+                    self.store_message(
+                        tenant_id,
+                        conversation_id,
+                        "tool",
+                        &tool_msg.content,
+                        agent_name,
+                    )
+                    .await?;
                 }
 
                 steps.push(crate::actor::AgentStep {
-                    thinking: step_thinking, tool_calls: Some(step_tool_calls),
+                    thinking: step_thinking,
+                    tool_calls: Some(step_tool_calls),
                 });
                 continue;
             }
@@ -823,35 +928,56 @@ impl AgentEngine {
 
             if response.thinking.is_some() {
                 steps.push(crate::actor::AgentStep {
-                    thinking: response.thinking.clone(), tool_calls: None,
+                    thinking: response.thinking.clone(),
+                    tool_calls: None,
                 });
             }
 
-            self.store_message(tenant_id, conversation_id, "assistant",
-                &serde_json::Value::String(final_message.clone()), agent_name).await?;
+            self.store_message(
+                tenant_id,
+                conversation_id,
+                "assistant",
+                &serde_json::Value::String(final_message.clone()),
+                agent_name,
+            )
+            .await?;
 
-            self.record_audit(tenant_id, author, agent_name, conversation_id,
-                correlation_id, &usage);
+            self.record_audit(
+                tenant_id,
+                author,
+                agent_name,
+                conversation_id,
+                correlation_id,
+                &usage,
+            );
 
             usage.duration_ms = start.elapsed().as_millis() as u64;
 
             // Send done event
-            let _ = tx.send(StreamEvent::Done {
-                conversation_id: conversation_id.to_string(),
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cache_read_tokens: Some(usage.cache_read_tokens),
-                cache_write_tokens: Some(usage.cache_write_tokens),
-            }).await;
+            let _ = tx
+                .send(StreamEvent::Done {
+                    conversation_id: conversation_id.to_string(),
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cache_read_tokens: Some(usage.cache_read_tokens),
+                    cache_write_tokens: Some(usage.cache_write_tokens),
+                })
+                .await;
 
             return Ok(AgentResponse {
-                message: final_message, conversation_id, usage, correlation_id, steps,
+                message: final_message,
+                conversation_id,
+                usage,
+                correlation_id,
+                steps,
             });
         }
 
-        let _ = tx.send(StreamEvent::Error {
-            message: format!("Agent '{agent_name}' exceeded maximum turns ({max_turns})"),
-        }).await;
+        let _ = tx
+            .send(StreamEvent::Error {
+                message: format!("Agent '{agent_name}' exceeded maximum turns ({max_turns})"),
+            })
+            .await;
         Err(CasperError::Internal(format!(
             "Agent '{agent_name}' exceeded maximum turns ({max_turns})"
         )))
@@ -871,8 +997,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Tool for EchoTool {
-        fn name(&self) -> &str { "echo" }
-        fn description(&self) -> &str { "Echoes input back." }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "Echoes input back."
+        }
         fn parameters_schema(&self) -> serde_json::Value {
             json!({
                 "type": "object",

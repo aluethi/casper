@@ -1,9 +1,4 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    http::header::AUTHORIZATION,
-    routing::post,
-};
+use axum::{Json, Router, extract::State, http::header::AUTHORIZATION, routing::post};
 use casper_base::{CasperError, RevocationCheck, TenantId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -45,15 +40,16 @@ async fn dev_login(
         return Err(CasperError::NotFound("dev login not enabled".into()));
     }
 
-    let signer = state.jwt_signer.as_ref().ok_or_else(|| {
-        CasperError::Internal("JWT signer not configured".into())
-    })?;
+    let signer = state
+        .jwt_signer
+        .as_ref()
+        .ok_or_else(|| CasperError::Internal("JWT signer not configured".into()))?;
 
     let row: Option<(Uuid, String, String, Vec<String>)> = sqlx::query_as(
         "SELECT tu.tenant_id, tu.subject, tu.role, tu.scopes
          FROM tenant_users tu
          WHERE tu.email = $1
-         LIMIT 1"
+         LIMIT 1",
     )
     .bind(&body.email)
     .fetch_optional(&state.db_owner)
@@ -70,8 +66,7 @@ async fn dev_login(
 
     let (access_token, _) =
         signer.sign_access_token(TenantId(tenant_id), &subject, &role, scopes)?;
-    let (refresh_token, _) =
-        signer.sign_refresh_token(TenantId(tenant_id), &subject)?;
+    let (refresh_token, _) = signer.sign_refresh_token(TenantId(tenant_id), &subject)?;
 
     Ok(Json(TokenResponse {
         access_token,
@@ -86,12 +81,14 @@ async fn refresh(
     State(state): State<AppState>,
     Json(body): Json<RefreshRequest>,
 ) -> Result<Json<TokenResponse>, CasperError> {
-    let verifier = state.jwt_verifier.as_ref().ok_or_else(|| {
-        CasperError::Internal("JWT verifier not configured".into())
-    })?;
-    let signer = state.jwt_signer.as_ref().ok_or_else(|| {
-        CasperError::Internal("JWT signer not configured".into())
-    })?;
+    let verifier = state
+        .jwt_verifier
+        .as_ref()
+        .ok_or_else(|| CasperError::Internal("JWT verifier not configured".into()))?;
+    let signer = state
+        .jwt_signer
+        .as_ref()
+        .ok_or_else(|| CasperError::Internal("JWT signer not configured".into()))?;
 
     let claims = verifier.verify(&body.refresh_token)?;
 
@@ -107,7 +104,7 @@ async fn refresh(
     state.revocation_cache.revoke(&claims.jti);
     let _ = sqlx::query(
         "INSERT INTO token_revocations (jti, tenant_id, revoked_by) VALUES ($1, $2, $3)
-         ON CONFLICT DO NOTHING"
+         ON CONFLICT DO NOTHING",
     )
     .bind(&claims.jti)
     .bind(claims.tid)
@@ -117,7 +114,7 @@ async fn refresh(
 
     let row: Option<(String, Vec<String>)> = sqlx::query_as(
         "SELECT role, scopes FROM tenant_users
-         WHERE tenant_id = $1 AND subject = $2"
+         WHERE tenant_id = $1 AND subject = $2",
     )
     .bind(claims.tid)
     .bind(&claims.sub)
@@ -154,16 +151,17 @@ async fn logout(
         .strip_prefix("Bearer ")
         .ok_or(CasperError::Unauthorized)?;
 
-    let verifier = state.jwt_verifier.as_ref().ok_or_else(|| {
-        CasperError::Internal("JWT verifier not configured".into())
-    })?;
+    let verifier = state
+        .jwt_verifier
+        .as_ref()
+        .ok_or_else(|| CasperError::Internal("JWT verifier not configured".into()))?;
 
     let claims = verifier.verify(token)?;
 
     state.revocation_cache.revoke(&claims.jti);
     let _ = sqlx::query(
         "INSERT INTO token_revocations (jti, tenant_id, revoked_by) VALUES ($1, $2, $3)
-         ON CONFLICT DO NOTHING"
+         ON CONFLICT DO NOTHING",
     )
     .bind(&claims.jti)
     .bind(claims.tid)

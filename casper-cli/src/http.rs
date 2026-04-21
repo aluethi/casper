@@ -9,7 +9,9 @@ pub fn authenticated_client() -> Result<(reqwest::Client, String), String> {
     let auth_value = format!("Bearer {}", creds.access_token);
     headers.insert(
         reqwest::header::AUTHORIZATION,
-        auth_value.parse().map_err(|e| format!("invalid token: {e}"))?,
+        auth_value
+            .parse()
+            .map_err(|e| format!("invalid token: {e}"))?,
     );
 
     let client = reqwest::Client::builder()

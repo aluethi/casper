@@ -1,6 +1,6 @@
+pub mod proxy;
 /// Model catalog, backends, quotas, deployments, and routing.
 pub mod routing;
-pub mod proxy;
 
 pub use routing::{
     ResolvedBackend, ResolvedDeployment, check_quota, merge_params, resolve_deployment,
@@ -8,6 +8,6 @@ pub use routing::{
 };
 
 pub use proxy::{
-    LlmRequest, LlmResponse, Message, MessageRole, StreamEvent,
-    dispatch, dispatch_with_retry, dispatch_stream, dispatch_stream_with_retry, is_non_retryable,
+    LlmRequest, LlmResponse, Message, MessageRole, StreamEvent, dispatch, dispatch_stream,
+    dispatch_stream_with_retry, dispatch_with_retry, is_non_retryable,
 };

@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -47,15 +47,19 @@ pub async fn set(
     req: &SetSecretRequest,
 ) -> Result<SecretKeyResponse, CasperError> {
     // Encrypt via Vault (HKDF per-tenant key derivation + AES-256-GCM)
-    vault.set(db_owner, tenant_id, &req.key, req.value.as_bytes()).await?;
+    vault
+        .set(db_owner, tenant_id, &req.key, req.value.as_bytes())
+        .await?;
 
     // Fetch the row back for timestamps via RLS-scoped connection
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: SecretKeyRow = sqlx::query_as(
-        "SELECT key, created_at, updated_at FROM tenant_secrets WHERE tenant_id = $1 AND key = $2"
+        "SELECT key, created_at, updated_at FROM tenant_secrets WHERE tenant_id = $1 AND key = $2",
     )
     .bind(tenant_id.0)
     .bind(&req.key)
@@ -63,31 +67,32 @@ pub async fn set(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(row_to_response(row))
 }
 
-pub async fn list(
-    db: &PgPool,
-    tenant_id: TenantId,
-) -> Result<Vec<SecretKeyResponse>, CasperError> {
+pub async fn list(db: &PgPool, tenant_id: TenantId) -> Result<Vec<SecretKeyResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<SecretKeyRow> = sqlx::query_as(
         "SELECT key, created_at, updated_at
          FROM tenant_secrets WHERE tenant_id = $1
-         ORDER BY key"
+         ORDER BY key",
     )
     .bind(tenant_id.0)
     .fetch_all(&mut *tx)
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(rows.into_iter().map(row_to_response).collect())

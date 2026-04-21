@@ -18,10 +18,13 @@ pub fn credentials_path() -> Result<PathBuf, String> {
 /// Load credentials from disk.
 pub fn load_credentials() -> Result<Credentials, String> {
     let path = credentials_path()?;
-    let contents = std::fs::read_to_string(&path)
-        .map_err(|e| format!("failed to read {}: {e} (have you run `casper auth login`?)", path.display()))?;
-    serde_json::from_str(&contents)
-        .map_err(|e| format!("failed to parse credentials: {e}"))
+    let contents = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "failed to read {}: {e} (have you run `casper auth login`?)",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&contents).map_err(|e| format!("failed to parse credentials: {e}"))
 }
 
 /// Save credentials to disk, creating the directory if needed.
@@ -33,8 +36,7 @@ pub fn save_credentials(creds: &Credentials) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(creds)
         .map_err(|e| format!("failed to serialize credentials: {e}"))?;
-    std::fs::write(&path, json)
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))
+    std::fs::write(&path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 /// Remove the credentials file (logout).

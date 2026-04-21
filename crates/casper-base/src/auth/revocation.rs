@@ -110,7 +110,12 @@ mod tests {
 
         let tid = crate::TenantId::new();
         let (token, jti) = signer
-            .sign_access_token(tid, "user:test@test.com", "admin", vec!["admin:*".to_string()])
+            .sign_access_token(
+                tid,
+                "user:test@test.com",
+                "admin",
+                vec!["admin:*".to_string()],
+            )
             .unwrap();
 
         let ctx = verifier.authenticate(&token, &cache).unwrap();

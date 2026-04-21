@@ -43,8 +43,8 @@ pub async fn handle(cmd: MemoryCmd) -> Result<(), String> {
             std::io::stdin()
                 .read_to_string(&mut buf)
                 .map_err(|e| format!("failed to read stdin: {e}"))?;
-            let value: serde_json::Value = serde_json::from_str(&buf)
-                .map_err(|e| format!("failed to parse JSON: {e}"))?;
+            let value: serde_json::Value =
+                serde_json::from_str(&buf).map_err(|e| format!("failed to parse JSON: {e}"))?;
 
             let resp = client
                 .put(format!("{server}/api/v1/agents/{agent}/memory"))
@@ -77,8 +77,8 @@ pub async fn handle_tenant(cmd: TenantMemoryCmd) -> Result<(), String> {
             std::io::stdin()
                 .read_to_string(&mut buf)
                 .map_err(|e| format!("failed to read stdin: {e}"))?;
-            let value: serde_json::Value = serde_json::from_str(&buf)
-                .map_err(|e| format!("failed to parse JSON: {e}"))?;
+            let value: serde_json::Value =
+                serde_json::from_str(&buf).map_err(|e| format!("failed to parse JSON: {e}"))?;
 
             let resp = client
                 .put(&url)

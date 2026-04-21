@@ -54,10 +54,7 @@ impl Tool for AskUserTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| CasperError::BadRequest("missing 'question' string".into()))?;
 
-        let options = input
-            .get("options")
-            .cloned()
-            .unwrap_or(json!([]));
+        let options = input.get("options").cloned().unwrap_or(json!([]));
 
         tracing::info!(
             agent = %ctx.agent_name,

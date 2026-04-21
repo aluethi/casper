@@ -58,7 +58,11 @@ async fn call_with_variant(
     });
 
     if let Some(max_tokens) = request.max_tokens {
-        let key = if variant == OpenAiVariant::Azure { "max_completion_tokens" } else { "max_tokens" };
+        let key = if variant == OpenAiVariant::Azure {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
         tracing::debug!(variant = ?variant, key, max_tokens, "setting max tokens param");
         body[key] = json!(max_tokens);
     }
@@ -103,9 +107,7 @@ async fn call_with_variant(
         }
     };
 
-    let mut http_req = client
-        .post(&url)
-        .header("content-type", "application/json");
+    let mut http_req = client.post(&url).header("content-type", "application/json");
 
     http_req = match variant {
         OpenAiVariant::Azure => http_req.header("api-key", api_key),
@@ -142,7 +144,15 @@ pub async fn call_stream(
     request: &LlmRequest,
     tx: mpsc::Sender<StreamEvent>,
 ) -> Result<LlmResponse, CasperError> {
-    call_stream_with_variant(client, base_url, api_key, request, tx, OpenAiVariant::Standard).await
+    call_stream_with_variant(
+        client,
+        base_url,
+        api_key,
+        request,
+        tx,
+        OpenAiVariant::Standard,
+    )
+    .await
 }
 
 /// Azure OpenAI streaming variant.
@@ -180,7 +190,11 @@ async fn call_stream_with_variant(
     });
 
     if let Some(max_tokens) = request.max_tokens {
-        let key = if variant == OpenAiVariant::Azure { "max_completion_tokens" } else { "max_tokens" };
+        let key = if variant == OpenAiVariant::Azure {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
         body[key] = json!(max_tokens);
     }
     if let Some(temp) = request.temperature {
@@ -195,7 +209,9 @@ async fn call_stream_with_variant(
     if let serde_json::Value::Object(ref extra) = request.extra {
         let body_obj = body.as_object_mut().unwrap();
         for (k, v) in extra {
-            if k == "system" || k == "max_tokens" || k == "max_completion_tokens" { continue; }
+            if k == "system" || k == "max_tokens" || k == "max_completion_tokens" {
+                continue;
+            }
             if !body_obj.contains_key(k) {
                 body_obj.insert(k.clone(), v.clone());
             }
@@ -206,8 +222,11 @@ async fn call_stream_with_variant(
         OpenAiVariant::Azure => base_url.to_string(),
         OpenAiVariant::Standard => {
             let base = base_url.trim_end_matches('/');
-            if base.ends_with("/v1") { format!("{base}/chat/completions") }
-            else { format!("{base}/v1/chat/completions") }
+            if base.ends_with("/v1") {
+                format!("{base}/chat/completions")
+            } else {
+                format!("{base}/v1/chat/completions")
+            }
         }
     };
 
@@ -246,10 +265,12 @@ async fn call_stream_with_variant(
     let mut finish_reason: Option<String> = None;
 
     // Tool call accumulation: index → (id, name, arguments_buf)
-    let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
+    let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
+        std::collections::HashMap::new();
 
     while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| CasperError::BadGateway(format!("Stream read error: {e}")))?;
+        let bytes =
+            chunk.map_err(|e| CasperError::BadGateway(format!("Stream read error: {e}")))?;
         let chunk_str = String::from_utf8_lossy(&bytes);
         buffer.push_str(&chunk_str.replace("\r\n", "\n").replace('\r', "\n"));
 
@@ -258,12 +279,16 @@ async fn call_stream_with_variant(
             buffer = buffer[pos + 1..].to_string();
 
             let line = line.trim();
-            if line.is_empty() || line.starts_with(':') { continue; }
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
             let data_str = match line.strip_prefix("data: ") {
                 Some(d) => d,
                 None => continue,
             };
-            if data_str == "[DONE]" { continue; }
+            if data_str == "[DONE]" {
+                continue;
+            }
 
             let data: serde_json::Value = match serde_json::from_str(data_str) {
                 Ok(v) => v,
@@ -271,14 +296,18 @@ async fn call_stream_with_variant(
             };
 
             if let Some(m) = data["model"].as_str() {
-                if model.is_empty() { model = m.to_string(); }
+                if model.is_empty() {
+                    model = m.to_string();
+                }
             }
 
             // Usage (sent in the final chunk)
             if let Some(u) = data.get("usage").filter(|v| v.is_object()) {
                 input_tokens = u["prompt_tokens"].as_i64().unwrap_or(0) as i32;
                 output_tokens = u["completion_tokens"].as_i64().unwrap_or(0) as i32;
-                cache_read_tokens = u["prompt_tokens_details"]["cached_tokens"].as_i64().map(|v| v as i32);
+                cache_read_tokens = u["prompt_tokens_details"]["cached_tokens"]
+                    .as_i64()
+                    .map(|v| v as i32);
             }
 
             if let Some(choice) = data["choices"].as_array().and_then(|a| a.first()) {
@@ -288,7 +317,11 @@ async fn call_stream_with_variant(
                 if let Some(c) = delta["content"].as_str() {
                     if !c.is_empty() {
                         content_parts.push(c.to_string());
-                        let _ = tx.send(StreamEvent::ContentDelta { delta: c.to_string() }).await;
+                        let _ = tx
+                            .send(StreamEvent::ContentDelta {
+                                delta: c.to_string(),
+                            })
+                            .await;
                     }
                 }
 
@@ -296,7 +329,11 @@ async fn call_stream_with_variant(
                 if let Some(r) = delta["reasoning_content"].as_str() {
                     if !r.is_empty() {
                         thinking_parts.push(r.to_string());
-                        let _ = tx.send(StreamEvent::Thinking { delta: r.to_string() }).await;
+                        let _ = tx
+                            .send(StreamEvent::Thinking {
+                                delta: r.to_string(),
+                            })
+                            .await;
                     }
                 }
 
@@ -304,10 +341,18 @@ async fn call_stream_with_variant(
                 if let Some(tcs) = delta["tool_calls"].as_array() {
                     for tc in tcs {
                         let idx = tc["index"].as_u64().unwrap_or(0) as usize;
-                        let entry = tool_acc.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
-                        if let Some(id) = tc["id"].as_str() { entry.0 = id.to_string(); }
-                        if let Some(name) = tc["function"]["name"].as_str() { entry.1 = name.to_string(); }
-                        if let Some(args) = tc["function"]["arguments"].as_str() { entry.2.push_str(args); }
+                        let entry = tool_acc
+                            .entry(idx)
+                            .or_insert_with(|| (String::new(), String::new(), String::new()));
+                        if let Some(id) = tc["id"].as_str() {
+                            entry.0 = id.to_string();
+                        }
+                        if let Some(name) = tc["function"]["name"].as_str() {
+                            entry.1 = name.to_string();
+                        }
+                        if let Some(args) = tc["function"]["arguments"].as_str() {
+                            entry.2.push_str(args);
+                        }
                     }
                 }
 
@@ -331,11 +376,17 @@ async fn call_stream_with_variant(
             "type": "function",
             "function": { "name": name, "arguments": args }
         }));
-        let _ = tx.send(StreamEvent::ToolCallStart { id, name, input }).await;
+        let _ = tx
+            .send(StreamEvent::ToolCallStart { id, name, input })
+            .await;
     }
 
     let content = content_parts.join("");
-    let thinking = if thinking_parts.is_empty() { None } else { Some(thinking_parts.join("")) };
+    let thinking = if thinking_parts.is_empty() {
+        None
+    } else {
+        Some(thinking_parts.join(""))
+    };
 
     Ok(LlmResponse {
         content,
@@ -345,7 +396,11 @@ async fn call_stream_with_variant(
         output_tokens,
         cache_read_tokens,
         cache_write_tokens: None,
-        tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+        tool_calls: if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        },
         finish_reason,
         thinking,
     })
@@ -402,10 +457,7 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
 
     let message = &choice["message"];
 
-    let content = message["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let content = message["content"].as_str().unwrap_or("").to_string();
 
     let role: MessageRole = message["role"]
         .as_str()
@@ -413,7 +465,8 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
         .unwrap_or(MessageRole::Assistant);
 
     // Extract thinking / reasoning content (OpenAI o-series, DeepSeek, etc.)
-    let thinking = message.get("reasoning_content")
+    let thinking = message
+        .get("reasoning_content")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
@@ -423,9 +476,7 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
         .map(|arr| arr.to_vec())
         .filter(|arr| !arr.is_empty());
 
-    let finish_reason = choice["finish_reason"]
-        .as_str()
-        .map(|s| s.to_string());
+    let finish_reason = choice["finish_reason"].as_str().map(|s| s.to_string());
 
     // Usage
     let usage = &resp["usage"];
@@ -437,10 +488,7 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
         .as_i64()
         .map(|v| v as i32);
 
-    let model = resp["model"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_string();
+    let model = resp["model"].as_str().unwrap_or("unknown").to_string();
 
     Ok(LlmResponse {
         content,
@@ -460,11 +508,7 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
 fn map_openai_error(status: u16, body: &str) -> CasperError {
     let message = serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| {
-            v["error"]["message"]
-                .as_str()
-                .map(|s| s.to_string())
-        })
+        .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| body.chars().take(500).collect());
 
     match status {
@@ -477,8 +521,8 @@ fn map_openai_error(status: u16, body: &str) -> CasperError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::types::Message;
+    use super::*;
 
     #[test]
     fn build_messages_preserves_system() {

@@ -3,7 +3,7 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    routing::{get, post, patch, delete},
+    routing::{delete, get, patch, post},
 };
 use casper_base::CasperError;
 use serde::{Deserialize, Serialize};
@@ -50,7 +50,8 @@ async fn update_provider(
     Json(body): Json<UpdateProviderRequest>,
 ) -> Result<Json<OAuthProviderResponse>, CasperError> {
     guard.require("platform:admin")?;
-    let provider = oauth_provider_service::update(&state.db_owner, &state.vault, &name, &body).await?;
+    let provider =
+        oauth_provider_service::update(&state.db_owner, &state.vault, &name, &body).await?;
     Ok(Json(provider))
 }
 
@@ -101,16 +102,24 @@ async fn discover_provider(
     for url in &urls_to_try {
         match state.http_client.get(url).send().await {
             Ok(resp) if resp.status().is_success() => {
-                let doc: serde_json::Value = resp.json().await
-                    .map_err(|e| CasperError::BadGateway(format!("invalid JSON from {url}: {e}")))?;
+                let doc: serde_json::Value = resp.json().await.map_err(|e| {
+                    CasperError::BadGateway(format!("invalid JSON from {url}: {e}"))
+                })?;
 
                 return Ok(Json(DiscoverResponse {
                     authorization_url: doc["authorization_endpoint"].as_str().map(String::from),
                     token_url: doc["token_endpoint"].as_str().map(String::from),
-                    revocation_url: doc["revocation_endpoint"].as_str().map(String::from)
+                    revocation_url: doc["revocation_endpoint"]
+                        .as_str()
+                        .map(String::from)
                         .or_else(|| doc["end_session_endpoint"].as_str().map(String::from)),
-                    scopes_supported: doc["scopes_supported"].as_array()
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    scopes_supported: doc["scopes_supported"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default(),
                     issuer: doc["issuer"].as_str().map(String::from),
                 }));
@@ -124,7 +133,9 @@ async fn discover_provider(
         }
     }
 
-    Err(CasperError::BadGateway(format!("could not discover OAuth config: {last_error}")))
+    Err(CasperError::BadGateway(format!(
+        "could not discover OAuth config: {last_error}"
+    )))
 }
 
 /// POST /api/v1/oauth-providers/register-mcp — auto-discover + DCR for an MCP server.
@@ -135,22 +146,38 @@ async fn register_mcp(
 ) -> Result<Json<OAuthProviderResponse>, CasperError> {
     guard.require("platform:admin")?;
 
-    let redirect_base = state.config.listen.public_url.clone()
+    let redirect_base = state
+        .config
+        .listen
+        .public_url
+        .clone()
         .unwrap_or_else(|| "http://localhost:3000".to_string());
     let redirect_uri = format!("{redirect_base}/api/v1/connections/callback");
 
     let provider = oauth_provider_service::register_mcp(
-        &state.db_owner, &state.vault, &state.http_client,
-        &redirect_uri, &body,
-    ).await?;
+        &state.db_owner,
+        &state.vault,
+        &state.http_client,
+        &redirect_uri,
+        &body,
+    )
+    .await?;
 
     Ok(Json(provider))
 }
 
 pub fn oauth_provider_router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/oauth-providers", post(create_provider).get(list_providers))
+        .route(
+            "/api/v1/oauth-providers",
+            post(create_provider).get(list_providers),
+        )
         .route("/api/v1/oauth-providers/discover", get(discover_provider))
         .route("/api/v1/oauth-providers/register-mcp", post(register_mcp))
-        .route("/api/v1/oauth-providers/{name}", get(get_provider).patch(update_provider).delete(delete_provider))
+        .route(
+            "/api/v1/oauth-providers/{name}",
+            get(get_provider)
+                .patch(update_provider)
+                .delete(delete_provider),
+        )
 }

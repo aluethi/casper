@@ -62,12 +62,11 @@ async fn create_agent_key(
     guard.require("platform:admin")?;
 
     // Verify backend exists
-    let exists: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM platform_backends WHERE id = $1")
-            .bind(backend_id)
-            .fetch_optional(&state.db_owner)
-            .await
-            .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+    let exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM platform_backends WHERE id = $1")
+        .bind(backend_id)
+        .fetch_optional(&state.db_owner)
+        .await
+        .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     if exists.is_none() {
         return Err(CasperError::NotFound(format!("backend {backend_id}")));

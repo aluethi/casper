@@ -1,11 +1,11 @@
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::http::header::AUTHORIZATION;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::HeaderMap;
+use axum::http::header::AUTHORIZATION;
 use axum::response::Response;
 use casper_base::CasperError;
 use dashmap::DashMap;
@@ -106,17 +106,19 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
     };
 
     // Load max_concurrent from backend extra_config (must happen before creating connection)
-    let extra_config: serde_json::Value = sqlx::query_scalar(
-        "SELECT extra_config FROM platform_backends WHERE id = $1"
-    )
-    .bind(backend_id)
-    .fetch_optional(&state.db_owner)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(serde_json::json!({}));
+    let extra_config: serde_json::Value =
+        sqlx::query_scalar("SELECT extra_config FROM platform_backends WHERE id = $1")
+            .bind(backend_id)
+            .fetch_optional(&state.db_owner)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(serde_json::json!({}));
 
-    let max_concurrent = extra_config.get("max_concurrent").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
+    let max_concurrent = extra_config
+        .get("max_concurrent")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8) as u32;
 
     let conn = Arc::new(AgentBackendConnection {
         id: connection_id,
@@ -144,7 +146,8 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
         status: "ok".to_string(),
         backend_id,
         config: ack_config,
-    })).unwrap();
+    }))
+    .unwrap();
     let _ = send_text(&mut ws_sink, &ack).await;
 
     // Audit connect
@@ -279,9 +282,7 @@ async fn wait_for_registration(
                         return Ok((reg.hostname, 0)); // max_concurrent comes from extra_config
                     }
                     _ => {
-                        return Err(CasperError::BadRequest(
-                            "expected register message".into(),
-                        ));
+                        return Err(CasperError::BadRequest("expected register message".into()));
                     }
                 }
             }

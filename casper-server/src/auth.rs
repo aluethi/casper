@@ -38,7 +38,8 @@ pub async fn auth_middleware(
         authenticate_api_key(&auth.db, token).await?
     } else {
         // JWT authentication
-        auth.jwt_verifier.authenticate(token, &auth.revocation_cache)?
+        auth.jwt_verifier
+            .authenticate(token, &auth.revocation_cache)?
     };
 
     request.extensions_mut().insert(ctx);
@@ -59,8 +60,7 @@ async fn authenticate_api_key(pool: &PgPool, key: &str) -> Result<TenantContext,
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    let (tenant_id, key_name, scope_strings, is_active) =
-        row.ok_or(CasperError::Unauthorized)?;
+    let (tenant_id, key_name, scope_strings, is_active) = row.ok_or(CasperError::Unauthorized)?;
 
     if !is_active {
         return Err(CasperError::Unauthorized);

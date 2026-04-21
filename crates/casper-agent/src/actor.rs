@@ -234,7 +234,10 @@ impl ActorRegistry {
 
     /// Get all actor keys (for reaper scanning).
     pub fn keys(&self) -> Vec<ActorKey> {
-        self.actors.iter().map(|entry| entry.key().clone()).collect()
+        self.actors
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     /// Get the last activity time for an actor.

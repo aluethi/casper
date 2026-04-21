@@ -72,14 +72,20 @@ jobs:
 
       - name: Deploy Bicep
         id: infra
-        uses: azure/arm-deploy@v2
-        with:
-          resourceGroupName: ${{ env.RESOURCE_GROUP }}
-          template: infra/main.bicep
-          parameters: >-
-            sshPublicKey=${{ secrets.VM_SSH_PUBLIC_KEY }}
-            frontDoorId=${{ env.FRONT_DOOR_ID }}
-          failOnStdErr: false
+        run: |
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters \
+              sshPublicKey="${{ secrets.VM_SSH_PUBLIC_KEY }}" \
+              frontDoorId="${FRONT_DOOR_ID}" \
+            --query '{acrName:properties.outputs.acrName.value, acrLoginServer:properties.outputs.acrLoginServer.value, vmPublicIp:properties.outputs.vmPublicIp.value, vmFqdn:properties.outputs.vmFqdn.value, sshCommand:properties.outputs.sshCommand.value}' \
+            -o json > /tmp/bicep-outputs.json
+          echo "acrName=$(jq -r .acrName /tmp/bicep-outputs.json)" >> $GITHUB_OUTPUT
+          echo "acrLoginServer=$(jq -r .acrLoginServer /tmp/bicep-outputs.json)" >> $GITHUB_OUTPUT
+          echo "vmPublicIp=$(jq -r .vmPublicIp /tmp/bicep-outputs.json)" >> $GITHUB_OUTPUT
+          echo "vmFqdn=$(jq -r .vmFqdn /tmp/bicep-outputs.json)" >> $GITHUB_OUTPUT
+          echo "sshCommand=$(jq -r .sshCommand /tmp/bicep-outputs.json)" >> $GITHUB_OUTPUT
 
       # ── Build & Push Docker Image ───────────────────────────────
 

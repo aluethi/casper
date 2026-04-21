@@ -81,5 +81,10 @@ async fn delete_api_key(
 pub fn apikey_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/api-keys", post(create_api_key).get(list_api_keys))
-        .route("/api/v1/api-keys/{id}", get(get_api_key).patch(update_api_key).delete(delete_api_key))
+        .route(
+            "/api/v1/api-keys/{id}",
+            get(get_api_key)
+                .patch(update_api_key)
+                .delete(delete_api_key),
+        )
 }

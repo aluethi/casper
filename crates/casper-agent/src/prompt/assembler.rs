@@ -50,16 +50,34 @@ pub async fn assemble_system_prompt(
                 let now_utc = chrono::Utc::now();
                 let zurich: chrono_tz::Tz = "Europe/Zurich".parse().unwrap();
                 let now_local = now_utc.with_timezone(&zurich);
-                let tz_abbr = if now_local.format("%Z").to_string() == "CEST" { "CEST" } else { "CET" };
+                let tz_abbr = if now_local.format("%Z").to_string() == "CEST" {
+                    "CEST"
+                } else {
+                    "CET"
+                };
                 let weekday = now_utc.format("%A");
                 let day_month_year = now_utc.format("%-d %B %Y");
                 let utc_time = now_utc.format("%H:%M");
                 let local_time = now_local.format("%H:%M");
                 let day_of_year = now_utc.format("%-j");
                 let quarter = match now_utc.format("%m").to_string().parse::<u32>().unwrap_or(1) {
-                    1..=3 => "Q1", 4..=6 => "Q2", 7..=9 => "Q3", _ => "Q4",
+                    1..=3 => "Q1",
+                    4..=6 => "Q2",
+                    7..=9 => "Q3",
+                    _ => "Q4",
                 };
-                let days_in_year = if now_utc.format("%Y").to_string().parse::<i32>().unwrap_or(2026) % 4 == 0 { 366 } else { 365 };
+                let days_in_year = if now_utc
+                    .format("%Y")
+                    .to_string()
+                    .parse::<i32>()
+                    .unwrap_or(2026)
+                    % 4
+                    == 0
+                {
+                    366
+                } else {
+                    365
+                };
                 let datetime_str = format!(
                     "{weekday}, {day_month_year}, {utc_time} UTC ({local_time} {tz_abbr}, Europe/Zurich) — {quarter}, day {day_of_year}/{days_in_year}"
                 );
@@ -68,14 +86,13 @@ pub async fn assemble_system_prompt(
                 ));
             }
             PromptBlock::TenantMemory { .. } => {
-                let row: Option<(String,)> = sqlx::query_as(
-                    "SELECT content FROM tenant_memory WHERE tenant_id = $1"
-                )
-                .bind(tenant_id)
-                .fetch_optional(db)
-                .await
-                .ok()
-                .flatten();
+                let row: Option<(String,)> =
+                    sqlx::query_as("SELECT content FROM tenant_memory WHERE tenant_id = $1")
+                        .bind(tenant_id)
+                        .fetch_optional(db)
+                        .await
+                        .ok()
+                        .flatten();
                 if let Some((content,)) = row {
                     if !content.is_empty() {
                         sections.push(format!("## Shared Knowledge\n\n{content}"));
@@ -84,7 +101,7 @@ pub async fn assemble_system_prompt(
             }
             PromptBlock::AgentMemory { .. } => {
                 let row: Option<(String,)> = sqlx::query_as(
-                    "SELECT content FROM agent_memory WHERE tenant_id = $1 AND agent_name = $2"
+                    "SELECT content FROM agent_memory WHERE tenant_id = $1 AND agent_name = $2",
                 )
                 .bind(tenant_id)
                 .bind(agent_name)
@@ -106,7 +123,8 @@ pub async fn assemble_system_prompt(
                     (No results — the engine injects matching chunks here when the user's query\n\
                     triggers a knowledge_search at assembly time. If this section is empty, you\n\
                     should call `knowledge_search` explicitly before answering procedural or\n\
-                    factual questions.)".to_string()
+                    factual questions.)"
+                        .to_string(),
                 );
             }
             PromptBlock::Delegates { agents, .. } => {
@@ -116,7 +134,7 @@ pub async fn assemble_system_prompt(
                         You can hand off tasks to these agents using the `delegate` tool. Delegation is\n\
                         synchronous — you will wait for the target agent to return a result before\n\
                         continuing. If delegation times out (default: 5 minutes), you receive an error.\n\
-                        In that case, inform the user and suggest an alternative.\n\n"
+                        In that case, inform the user and suggest an alternative.\n\n",
                     );
                     for agent in agents {
                         s.push_str(&format!(
@@ -127,12 +145,14 @@ pub async fn assemble_system_prompt(
                     sections.push(s);
                 }
             }
-            PromptBlock::Variable { key, value, label, .. } => {
+            PromptBlock::Variable {
+                key, value, label, ..
+            } => {
                 sections.push(format!("## {label}\n\n{key}: {value}"));
             }
             PromptBlock::Snippet { snippet_name, .. } => {
                 let row: Option<(String,)> = sqlx::query_as(
-                    "SELECT content FROM snippets WHERE tenant_id = $1 AND name = $2"
+                    "SELECT content FROM snippets WHERE tenant_id = $1 AND name = $2",
                 )
                 .bind(tenant_id)
                 .bind(snippet_name.as_str())
@@ -160,7 +180,6 @@ pub async fn assemble_system_prompt(
     sections.join("\n\n")
 }
 
-
 /// Generate tool documentation from the agent's tools config.
 /// This is the "Tool Reference" block in the assembled prompt — it tells
 /// the LLM what tools are available, how to call them, and their constraints.
@@ -184,15 +203,21 @@ pub fn generate_tool_documentation(
         Authentication for all tools is pre-configured. Do not run login \
         commands or attempt to handle authentication yourself. If a tool returns \
         `{\"error\": \"forbidden\"}`, you lack the required scope — report the error to \
-        the user.\n\n"
+        the user.\n\n",
     );
 
     if let Some(tools) = builtin {
         for tool in tools {
-            let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let name = tool
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             match name {
                 "knowledge_search" => {
-                    let max = tool.get("max_results").and_then(|v| v.as_i64()).unwrap_or(5);
+                    let max = tool
+                        .get("max_results")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(5);
                     s.push_str(&format!(
                         "### knowledge_search\n\
                         Search runbooks and documentation. **Use BEFORE answering factual or procedural \
@@ -201,7 +226,10 @@ pub fn generate_tool_documentation(
                     ));
                 }
                 "update_memory" => {
-                    let max_tokens = tool.get("max_document_tokens").and_then(|v| v.as_i64()).unwrap_or(4000);
+                    let max_tokens = tool
+                        .get("max_document_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(4000);
                     s.push_str(&format!(
                         "### update_memory\n\
                         Replace your entire memory document with new content (max ~{max_tokens} tokens). \
@@ -212,7 +240,10 @@ pub fn generate_tool_documentation(
                     ));
                 }
                 "web_search" => {
-                    let max = tool.get("max_results").and_then(|v| v.as_i64()).unwrap_or(10);
+                    let max = tool
+                        .get("max_results")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(10);
                     s.push_str(&format!(
                         "### web_search\n\
                         Search the web. Returns up to {max} results.\n\n\
@@ -222,8 +253,14 @@ pub fn generate_tool_documentation(
                     ));
                 }
                 "web_fetch" => {
-                    let timeout = tool.get("timeout_secs").and_then(|v| v.as_i64()).unwrap_or(30);
-                    let max_bytes = tool.get("max_response_bytes").and_then(|v| v.as_i64()).unwrap_or(1048576);
+                    let timeout = tool
+                        .get("timeout_secs")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(30);
+                    let max_bytes = tool
+                        .get("max_response_bytes")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(1048576);
                     s.push_str(&format!(
                         "### web_fetch\n\
                         Fetch the content of a URL. Timeout: {timeout}s, max response: {}KB.\n\n\
@@ -252,7 +289,9 @@ pub fn generate_tool_documentation(
                     );
                 }
                 other => {
-                    s.push_str(&format!("### {other}\nBuilt-in tool. Refer to platform documentation for usage.\n\n"));
+                    s.push_str(&format!(
+                        "### {other}\nBuilt-in tool. Refer to platform documentation for usage.\n\n"
+                    ));
                 }
             }
         }
@@ -260,7 +299,10 @@ pub fn generate_tool_documentation(
 
     if let Some(servers) = mcp {
         for server in servers {
-            let server_name = server.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let server_name = server
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             s.push_str(&format!(
                 "### MCP Server: {server_name}\n\
                 External tools from this server are prefixed with `mcp__{server_name}__`. \
@@ -268,14 +310,20 @@ pub fn generate_tool_documentation(
             ));
 
             // Describe the auth mode so the LLM knows what to expect
-            let auth_type = server.get("auth")
+            let auth_type = server
+                .get("auth")
                 .and_then(|a| a.get("type"))
                 .and_then(|v| v.as_str())
-                .unwrap_or(if server.get("api_key").is_some() { "bearer" } else { "none" });
+                .unwrap_or(if server.get("api_key").is_some() {
+                    "bearer"
+                } else {
+                    "none"
+                });
 
             match auth_type {
                 "user_oauth" => {
-                    let provider = server.get("auth")
+                    let provider = server
+                        .get("auth")
                         .and_then(|a| a.get("provider"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("the provider");

@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -77,7 +77,9 @@ pub async fn create(
     actor: &str,
 ) -> Result<SnippetResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let id = Uuid::now_v7();
@@ -104,18 +106,18 @@ pub async fn create(
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(row_to_response(row))
 }
 
-pub async fn list(
-    db: &PgPool,
-    tenant_id: TenantId,
-) -> Result<Vec<SnippetResponse>, CasperError> {
+pub async fn list(db: &PgPool, tenant_id: TenantId) -> Result<Vec<SnippetResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<SnippetRow> = sqlx::query_as(
@@ -128,7 +130,8 @@ pub async fn list(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(rows.into_iter().map(row_to_response).collect())
@@ -140,7 +143,9 @@ pub async fn get(
     id: Uuid,
 ) -> Result<SnippetResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let row: Option<SnippetRow> = sqlx::query_as(
@@ -153,7 +158,8 @@ pub async fn get(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -167,7 +173,9 @@ pub async fn update(
     req: &UpdateSnippetRequest,
 ) -> Result<SnippetResponse, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let new_token_estimate: Option<i32> = req.content.as_ref().map(|c| estimate_tokens(c));
@@ -197,7 +205,8 @@ pub async fn update(
         _ => CasperError::Internal(format!("DB error: {e}")),
     })?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
@@ -210,7 +219,9 @@ pub async fn delete(
     id: Uuid,
 ) -> Result<serde_json::Value, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let result = sqlx::query("DELETE FROM snippets WHERE id = $1 AND tenant_id = $2")
@@ -224,7 +235,8 @@ pub async fn delete(
         return Err(CasperError::NotFound(format!("snippet {id}")));
     }
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(serde_json::json!({ "deleted": true }))

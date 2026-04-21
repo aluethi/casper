@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use casper_base::CasperError;
@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use casper_wire::{WsMessage, InferenceMessage};
+use casper_wire::{InferenceMessage, WsMessage};
 
 // ── Agent Backend Connection ──────────────────────────────────────
 
@@ -43,10 +43,7 @@ impl AgentBackendRegistry {
 
     /// Register a new connection for a backend.
     pub fn register(&self, backend_id: Uuid, conn: Arc<AgentBackendConnection>) {
-        self.connections
-            .entry(backend_id)
-            .or_default()
-            .push(conn);
+        self.connections.entry(backend_id).or_default().push(conn);
         self.round_robin
             .entry(backend_id)
             .or_insert_with(|| AtomicU32::new(0));
@@ -123,9 +120,8 @@ impl AgentBackendRegistry {
             timeout_ms,
         });
 
-        let msg_text = serde_json::to_string(&ws_req).map_err(|e| {
-            CasperError::Internal(format!("failed to serialize ws request: {e}"))
-        })?;
+        let msg_text = serde_json::to_string(&ws_req)
+            .map_err(|e| CasperError::Internal(format!("failed to serialize ws request: {e}")))?;
 
         // Send the request over WebSocket
         if conn.sender.send(msg_text).await.is_err() {
@@ -166,9 +162,8 @@ impl AgentBackendRegistry {
                 });
                 let usage = resp.usage.unwrap_or_default();
 
-                let role: MessageRole = serde_json::from_value(
-                    serde_json::Value::String(msg.role),
-                ).unwrap_or(MessageRole::Assistant);
+                let role: MessageRole = serde_json::from_value(serde_json::Value::String(msg.role))
+                    .unwrap_or(MessageRole::Assistant);
 
                 Ok(LlmResponse {
                     content: msg.content.unwrap_or_default(),
@@ -233,9 +228,10 @@ impl AgentBackendRegistry {
         &self,
         backend_id: &Uuid,
     ) -> Result<Arc<AgentBackendConnection>, CasperError> {
-        let conns = self.connections.get(backend_id).ok_or_else(|| {
-            CasperError::Unavailable("no agent backend connections".into())
-        })?;
+        let conns = self
+            .connections
+            .get(backend_id)
+            .ok_or_else(|| CasperError::Unavailable("no agent backend connections".into()))?;
 
         if conns.is_empty() {
             return Err(CasperError::Unavailable(
@@ -243,9 +239,10 @@ impl AgentBackendRegistry {
             ));
         }
 
-        let counter = self.round_robin.get(backend_id).ok_or_else(|| {
-            CasperError::Unavailable("no agent backend connections".into())
-        })?;
+        let counter = self
+            .round_robin
+            .get(backend_id)
+            .ok_or_else(|| CasperError::Unavailable("no agent backend connections".into()))?;
 
         let len = conns.len() as u32;
         for _ in 0..len {

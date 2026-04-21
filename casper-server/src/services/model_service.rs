@@ -155,8 +155,7 @@ fn row_to_response(r: ModelRow) -> ModelResponse {
     }
 }
 
-const MODEL_COLUMNS: &str =
-    "id, name, display_name, provider, \
+const MODEL_COLUMNS: &str = "id, name, display_name, provider, \
      cap_chat, cap_embedding, cap_thinking, cap_vision, \
      cap_tool_use, cap_json_output, cap_audio_in, cap_audio_out, cap_image_gen, \
      context_window, max_output_tokens, embedding_dimensions, \
@@ -165,10 +164,7 @@ const MODEL_COLUMNS: &str =
 
 // ── Service functions (platform-scoped: takes db_owner directly) ─
 
-pub async fn create(
-    db: &PgPool,
-    req: &CreateModelRequest,
-) -> Result<ModelResponse, CasperError> {
+pub async fn create(db: &PgPool, req: &CreateModelRequest) -> Result<ModelResponse, CasperError> {
     let id = Uuid::now_v7();
 
     let row: ModelRow = sqlx::query_as(&format!(
@@ -252,17 +248,13 @@ pub async fn list(
     })
 }
 
-pub async fn get(
-    db: &PgPool,
-    id: Uuid,
-) -> Result<ModelResponse, CasperError> {
-    let row: Option<ModelRow> = sqlx::query_as(&format!(
-        "SELECT {MODEL_COLUMNS} FROM models WHERE id = $1"
-    ))
-    .bind(id)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
+pub async fn get(db: &PgPool, id: Uuid) -> Result<ModelResponse, CasperError> {
+    let row: Option<ModelRow> =
+        sqlx::query_as(&format!("SELECT {MODEL_COLUMNS} FROM models WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     row.map(row_to_response)
         .ok_or_else(|| CasperError::NotFound(format!("model {id}")))

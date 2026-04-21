@@ -69,10 +69,7 @@ pub async fn call(
         }
     }
 
-    let url = format!(
-        "{}/v1/messages",
-        base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
     let response = client
         .post(&url)
@@ -146,7 +143,9 @@ pub async fn call_stream(
     if let serde_json::Value::Object(ref extra) = request.extra {
         let body_obj = body.as_object_mut().unwrap();
         for (k, v) in extra {
-            if k == "system" { continue; }
+            if k == "system" {
+                continue;
+            }
             if !body_obj.contains_key(k) {
                 body_obj.insert(k.clone(), v.clone());
             }
@@ -195,7 +194,8 @@ pub async fn call_stream(
     let mut current_block_type: Option<String> = None;
 
     while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| CasperError::BadGateway(format!("Stream read error: {e}")))?;
+        let bytes =
+            chunk.map_err(|e| CasperError::BadGateway(format!("Stream read error: {e}")))?;
         buffer.push_str(&String::from_utf8_lossy(&bytes));
 
         // Normalize \r\n → \n so the event boundary split works regardless of transport
@@ -217,7 +217,9 @@ pub async fn call_stream(
             }
 
             let data_str = data_lines.join("\n");
-            if data_str.is_empty() { continue; }
+            if data_str.is_empty() {
+                continue;
+            }
             let data: serde_json::Value = match serde_json::from_str(&data_str) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -231,7 +233,9 @@ pub async fn call_stream(
                     let usage = &data["message"]["usage"];
                     input_tokens = usage["input_tokens"].as_i64().unwrap_or(0) as i32;
                     cache_read_tokens = usage["cache_read_input_tokens"].as_i64().map(|v| v as i32);
-                    cache_write_tokens = usage["cache_creation_input_tokens"].as_i64().map(|v| v as i32);
+                    cache_write_tokens = usage["cache_creation_input_tokens"]
+                        .as_i64()
+                        .map(|v| v as i32);
                 }
                 "content_block_start" => {
                     let block = &data["content_block"];
@@ -249,13 +253,21 @@ pub async fn call_stream(
                         Some("thinking_delta") => {
                             if let Some(t) = delta["thinking"].as_str() {
                                 thinking_parts.push(t.to_string());
-                                let _ = tx.send(StreamEvent::Thinking { delta: t.to_string() }).await;
+                                let _ = tx
+                                    .send(StreamEvent::Thinking {
+                                        delta: t.to_string(),
+                                    })
+                                    .await;
                             }
                         }
                         Some("text_delta") => {
                             if let Some(t) = delta["text"].as_str() {
                                 content_parts.push(t.to_string());
-                                let _ = tx.send(StreamEvent::ContentDelta { delta: t.to_string() }).await;
+                                let _ = tx
+                                    .send(StreamEvent::ContentDelta {
+                                        delta: t.to_string(),
+                                    })
+                                    .await;
                             }
                         }
                         Some("input_json_delta") => {
@@ -268,8 +280,10 @@ pub async fn call_stream(
                 }
                 "content_block_stop" => {
                     if current_block_type.as_deref() == Some("tool_use") {
-                        let input: serde_json::Value = serde_json::from_str(&current_tool_json).unwrap_or(json!({}));
-                        let arguments = serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string());
+                        let input: serde_json::Value =
+                            serde_json::from_str(&current_tool_json).unwrap_or(json!({}));
+                        let arguments =
+                            serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string());
                         tool_calls.push(json!({
                             "id": current_tool_id,
                             "type": "function",
@@ -278,22 +292,27 @@ pub async fn call_stream(
                                 "arguments": arguments,
                             }
                         }));
-                        let _ = tx.send(StreamEvent::ToolCallStart {
-                            id: current_tool_id.clone(),
-                            name: current_tool_name.clone(),
-                            input,
-                        }).await;
+                        let _ = tx
+                            .send(StreamEvent::ToolCallStart {
+                                id: current_tool_id.clone(),
+                                name: current_tool_name.clone(),
+                                input,
+                            })
+                            .await;
                     }
                     current_block_type = None;
                 }
                 "message_delta" => {
                     if let Some(sr) = data["delta"]["stop_reason"].as_str() {
-                        finish_reason = Some(match sr {
-                            "end_turn" => "stop",
-                            "max_tokens" => "length",
-                            "tool_use" => "tool_calls",
-                            other => other,
-                        }.to_string());
+                        finish_reason = Some(
+                            match sr {
+                                "end_turn" => "stop",
+                                "max_tokens" => "length",
+                                "tool_use" => "tool_calls",
+                                other => other,
+                            }
+                            .to_string(),
+                        );
                     }
                     let usage = &data["usage"];
                     if let Some(ot) = usage["output_tokens"].as_i64() {
@@ -306,7 +325,11 @@ pub async fn call_stream(
     }
 
     let content = content_parts.join("");
-    let thinking = if thinking_parts.is_empty() { None } else { Some(thinking_parts.join("")) };
+    let thinking = if thinking_parts.is_empty() {
+        None
+    } else {
+        Some(thinking_parts.join(""))
+    };
 
     Ok(LlmResponse {
         content,
@@ -316,7 +339,11 @@ pub async fn call_stream(
         output_tokens,
         cache_read_tokens,
         cache_write_tokens,
-        tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+        tool_calls: if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        },
         finish_reason,
         thinking,
     })
@@ -385,7 +412,11 @@ fn build_anthropic_messages(
                 // Convert OpenAI tool message → Anthropic tool_result content block
                 // OpenAI: {role: "tool", tool_call_id: "...", content: "..."}
                 // Anthropic: {role: "user", content: [{type: "tool_result", tool_use_id: "...", content: "..."}]}
-                let tool_call_id = msg.content.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("");
+                let tool_call_id = msg
+                    .content
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let content = msg.content.get("content").cloned().unwrap_or(json!(""));
 
                 out.push(json!({
@@ -437,7 +468,8 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
                     let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
                     let input = block.get("input").cloned().unwrap_or(json!({}));
-                    let arguments = serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string());
+                    let arguments =
+                        serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string());
 
                     tool_calls.push(json!({
                         "id": id,
@@ -458,26 +490,19 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
     let usage = &resp["usage"];
     let input_tokens = usage["input_tokens"].as_i64().unwrap_or(0) as i32;
     let output_tokens = usage["output_tokens"].as_i64().unwrap_or(0) as i32;
-    let cache_read_tokens = usage["cache_read_input_tokens"]
-        .as_i64()
-        .map(|v| v as i32);
+    let cache_read_tokens = usage["cache_read_input_tokens"].as_i64().map(|v| v as i32);
     let cache_write_tokens = usage["cache_creation_input_tokens"]
         .as_i64()
         .map(|v| v as i32);
 
-    let finish_reason = resp["stop_reason"].as_str().map(|s| {
-        match s {
-            "end_turn" => "stop".to_string(),
-            "max_tokens" => "length".to_string(),
-            "tool_use" => "tool_calls".to_string(),
-            other => other.to_string(),
-        }
+    let finish_reason = resp["stop_reason"].as_str().map(|s| match s {
+        "end_turn" => "stop".to_string(),
+        "max_tokens" => "length".to_string(),
+        "tool_use" => "tool_calls".to_string(),
+        other => other.to_string(),
     });
 
-    let model = resp["model"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_string();
+    let model = resp["model"].as_str().unwrap_or("unknown").to_string();
 
     let thinking = if thinking_parts.is_empty() {
         None
@@ -507,17 +532,15 @@ fn parse_response(resp: &serde_json::Value) -> Result<LlmResponse, CasperError> 
 fn map_anthropic_error(status: u16, body: &str) -> CasperError {
     let message = serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| {
-            v["error"]["message"]
-                .as_str()
-                .map(|s| s.to_string())
-        })
+        .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| body.chars().take(500).collect());
 
     match status {
         401 => CasperError::BadGateway(format!("Anthropic auth error: {message}")),
         429 => CasperError::RateLimited,
-        500..=599 => CasperError::BadGateway(format!("Anthropic server error ({status}): {message}")),
+        500..=599 => {
+            CasperError::BadGateway(format!("Anthropic server error ({status}): {message}"))
+        }
         _ => CasperError::BadGateway(format!("Anthropic error ({status}): {message}")),
     }
 }
@@ -635,7 +658,10 @@ mod tests {
             "input_schema": func.get("parameters").cloned().unwrap_or(json!({"type": "object"})),
         });
         assert_eq!(anthropic["name"], "get_weather");
-        assert_eq!(anthropic["input_schema"]["properties"]["city"]["type"], "string");
+        assert_eq!(
+            anthropic["input_schema"]["properties"]["city"]["type"],
+            "string"
+        );
     }
 
     #[test]
@@ -698,7 +724,8 @@ mod tests {
         assert_eq!(tc[0]["type"], "function");
         assert_eq!(tc[0]["function"]["name"], "search");
         // arguments is a JSON string
-        let args: serde_json::Value = serde_json::from_str(tc[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        let args: serde_json::Value =
+            serde_json::from_str(tc[0]["function"]["arguments"].as_str().unwrap()).unwrap();
         assert_eq!(args["query"], "rust programming");
     }
 

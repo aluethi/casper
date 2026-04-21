@@ -64,8 +64,7 @@ async fn list_agent_memory_history(
 ) -> Result<Json<Vec<AgentMemoryHistoryResponse>>, CasperError> {
     guard.require("memory:read")?;
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let history =
-        memory_service::list_agent_memory_history(&state.db, tenant_id, &name).await?;
+    let history = memory_service::list_agent_memory_history(&state.db, tenant_id, &name).await?;
     Ok(Json(history))
 }
 
@@ -105,13 +104,9 @@ async fn update_tenant_memory(
 ) -> Result<Json<TenantMemoryResponse>, CasperError> {
     guard.require("memory:write")?;
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let mem = memory_service::update_tenant_memory(
-        &state.db,
-        tenant_id,
-        &body.content,
-        &guard.0.actor(),
-    )
-    .await?;
+    let mem =
+        memory_service::update_tenant_memory(&state.db, tenant_id, &body.content, &guard.0.actor())
+            .await?;
     Ok(Json(mem))
 }
 
@@ -134,8 +129,7 @@ async fn get_tenant_memory_version(
 ) -> Result<Json<TenantMemoryHistoryResponse>, CasperError> {
     guard.require("memory:read")?;
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    let entry =
-        memory_service::get_tenant_memory_version(&state.db, tenant_id, version).await?;
+    let entry = memory_service::get_tenant_memory_version(&state.db, tenant_id, version).await?;
     Ok(Json(entry))
 }
 

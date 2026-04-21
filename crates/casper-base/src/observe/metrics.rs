@@ -1,6 +1,6 @@
 use prometheus::{
-    Encoder, Histogram, IntCounter, IntCounterVec, IntGaugeVec,
-    Registry, TextEncoder, histogram_opts, opts,
+    Encoder, Histogram, IntCounter, IntCounterVec, IntGaugeVec, Registry, TextEncoder,
+    histogram_opts, opts,
 };
 
 /// Prometheus runtime metrics.
@@ -31,12 +31,10 @@ impl RuntimeMetrics {
         )
         .unwrap();
 
-        let llm_call_duration = Histogram::with_opts(
-            histogram_opts!(
-                "casper_llm_call_duration_seconds",
-                "LLM call duration in seconds"
-            ),
-        )
+        let llm_call_duration = Histogram::with_opts(histogram_opts!(
+            "casper_llm_call_duration_seconds",
+            "LLM call duration in seconds"
+        ))
         .unwrap();
 
         let tool_calls_total = IntCounterVec::new(
@@ -45,11 +43,8 @@ impl RuntimeMetrics {
         )
         .unwrap();
 
-        let actor_activations = IntCounter::new(
-            "casper_actor_activations_total",
-            "Total actor activations",
-        )
-        .unwrap();
+        let actor_activations =
+            IntCounter::new("casper_actor_activations_total", "Total actor activations").unwrap();
 
         let actor_dehydrations = IntCounter::new(
             "casper_actor_dehydrations_total",
@@ -63,12 +58,10 @@ impl RuntimeMetrics {
         )
         .unwrap();
 
-        let http_request_duration = Histogram::with_opts(
-            histogram_opts!(
-                "casper_http_request_duration_seconds",
-                "HTTP request duration in seconds"
-            ),
-        )
+        let http_request_duration = Histogram::with_opts(histogram_opts!(
+            "casper_http_request_duration_seconds",
+            "HTTP request duration in seconds"
+        ))
         .unwrap();
 
         // Agent backend metrics
@@ -90,12 +83,10 @@ impl RuntimeMetrics {
         )
         .unwrap();
 
-        let agent_backend_request_duration = Histogram::with_opts(
-            histogram_opts!(
-                "casper_agent_backend_request_duration_seconds",
-                "Agent backend request duration in seconds"
-            ),
-        )
+        let agent_backend_request_duration = Histogram::with_opts(histogram_opts!(
+            "casper_agent_backend_request_duration_seconds",
+            "Agent backend request duration in seconds"
+        ))
         .unwrap();
 
         let agent_backend_errors = IntCounterVec::new(
@@ -107,17 +98,39 @@ impl RuntimeMetrics {
         )
         .unwrap();
 
-        registry.register(Box::new(llm_calls_total.clone())).unwrap();
-        registry.register(Box::new(llm_call_duration.clone())).unwrap();
-        registry.register(Box::new(tool_calls_total.clone())).unwrap();
-        registry.register(Box::new(actor_activations.clone())).unwrap();
-        registry.register(Box::new(actor_dehydrations.clone())).unwrap();
-        registry.register(Box::new(http_requests_total.clone())).unwrap();
-        registry.register(Box::new(http_request_duration.clone())).unwrap();
-        registry.register(Box::new(agent_backend_connections.clone())).unwrap();
-        registry.register(Box::new(agent_backend_active_requests.clone())).unwrap();
-        registry.register(Box::new(agent_backend_request_duration.clone())).unwrap();
-        registry.register(Box::new(agent_backend_errors.clone())).unwrap();
+        registry
+            .register(Box::new(llm_calls_total.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(llm_call_duration.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(tool_calls_total.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(actor_activations.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(actor_dehydrations.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(http_requests_total.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(http_request_duration.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(agent_backend_connections.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(agent_backend_active_requests.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(agent_backend_request_duration.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(agent_backend_errors.clone()))
+            .unwrap();
 
         Self {
             registry,
@@ -158,7 +171,10 @@ mod tests {
     #[test]
     fn metrics_render() {
         let metrics = RuntimeMetrics::new();
-        metrics.llm_calls_total.with_label_values(&["sonnet-4", "api"]).inc();
+        metrics
+            .llm_calls_total
+            .with_label_values(&["sonnet-4", "api"])
+            .inc();
         metrics.actor_activations.inc();
 
         let output = metrics.render();

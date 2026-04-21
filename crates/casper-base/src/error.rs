@@ -87,7 +87,10 @@ mod tests {
 
     #[test]
     fn error_status_codes() {
-        assert_eq!(CasperError::Unauthorized.status_code(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            CasperError::Unauthorized.status_code(),
+            StatusCode::UNAUTHORIZED
+        );
         assert_eq!(
             CasperError::Forbidden("test".into()).status_code(),
             StatusCode::FORBIDDEN
@@ -104,7 +107,10 @@ mod tests {
             CasperError::BadRequest("test".into()).status_code(),
             StatusCode::BAD_REQUEST
         );
-        assert_eq!(CasperError::RateLimited.status_code(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            CasperError::RateLimited.status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
         assert_eq!(
             CasperError::Internal("test".into()).status_code(),
             StatusCode::INTERNAL_SERVER_ERROR

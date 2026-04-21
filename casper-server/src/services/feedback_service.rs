@@ -1,5 +1,5 @@
-use casper_base::{CasperError, TenantId};
 use casper_base::TenantDb;
+use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -76,21 +76,19 @@ pub async fn create(
 
     // Validate type-specific fields
     match req.feedback_type.as_str() {
-        "rating" => {
-            match req.rating {
-                Some(r) if r == 1 || r == -1 => {}
-                Some(r) => {
-                    return Err(CasperError::BadRequest(format!(
-                        "rating must be +1 or -1, got {r}"
-                    )));
-                }
-                None => {
-                    return Err(CasperError::BadRequest(
-                        "rating field is required for feedback_type 'rating'".into(),
-                    ));
-                }
+        "rating" => match req.rating {
+            Some(r) if r == 1 || r == -1 => {}
+            Some(r) => {
+                return Err(CasperError::BadRequest(format!(
+                    "rating must be +1 or -1, got {r}"
+                )));
             }
-        }
+            None => {
+                return Err(CasperError::BadRequest(
+                    "rating field is required for feedback_type 'rating'".into(),
+                ));
+            }
+        },
         "correction" => {
             if req.correction.is_none() || req.correction.as_deref() == Some("") {
                 return Err(CasperError::BadRequest(
@@ -109,7 +107,9 @@ pub async fn create(
     }
 
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     // Validate message exists and get its conversation_id + agent_name
@@ -125,9 +125,8 @@ pub async fn create(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    let (_msg_id, conversation_id, agent_name) = msg_row.ok_or_else(|| {
-        CasperError::NotFound(format!("message {}", req.message_id))
-    })?;
+    let (_msg_id, conversation_id, agent_name) =
+        msg_row.ok_or_else(|| CasperError::NotFound(format!("message {}", req.message_id)))?;
 
     let id = Uuid::now_v7();
     let tags_val: Option<&[String]> = if req.tags.is_empty() {
@@ -155,7 +154,8 @@ pub async fn create(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(row)
@@ -167,7 +167,9 @@ pub async fn list(
     params: &ListFeedbackParams,
 ) -> Result<Vec<FeedbackResponse>, CasperError> {
     let tdb = TenantDb::new(db.clone(), tenant_id);
-    let mut tx = tdb.begin().await
+    let mut tx = tdb
+        .begin()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let rows: Vec<FeedbackResponse> = sqlx::query_as(
@@ -193,7 +195,8 @@ pub async fn list(
     .await
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     Ok(rows)

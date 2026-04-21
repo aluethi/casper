@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
+use crate::McpClient;
 use async_trait::async_trait;
 use casper_base::CasperError;
-use crate::McpClient;
 use serde_json::json;
 
 use super::{Tool, ToolContext, ToolResult};
@@ -94,49 +94,56 @@ impl Tool for McpTool {
         );
 
         // Resolve auth token based on the auth mode
-        let auth_token: Option<String> = match &self.auth {
-            McpAuth::None | McpAuth::Bearer => None, // Bearer already set on the client
-            McpAuth::UserOAuth { provider } => {
-                let user = ctx.invoking_user.as_deref().ok_or_else(|| {
-                    CasperError::Forbidden(format!(
-                        "Tool '{}' requires user_oauth but no user context is available.",
-                        self.qualified_name
-                    ))
-                })?;
-                let resolver = ctx.token_resolver.as_ref().ok_or_else(|| {
-                    CasperError::Internal("token_resolver not configured".into())
-                })?;
-                Some(resolver.resolve_user_oauth(ctx.tenant_id, user, provider).await?)
-            }
-            McpAuth::McpOAuth => {
-                let user = ctx.invoking_user.as_deref().ok_or_else(|| {
-                    CasperError::Forbidden(format!(
-                        "Tool '{}' requires MCP OAuth but no user context is available.",
-                        self.qualified_name
-                    ))
-                })?;
-                let resolver = ctx.token_resolver.as_ref().ok_or_else(|| {
-                    CasperError::Internal("token_resolver not configured".into())
-                })?;
-                match resolver.resolve_mcp_oauth(ctx.tenant_id, user, self.client.url()).await {
-                    Ok(token) => Some(token),
-                    Err(e) if e.to_string().contains("has not connected") => {
-                        // Signal the engine to start the MCP OAuth flow
-                        return Ok(ToolResult::ok(json!({
-                            "__mcp_oauth_required__": true,
-                            "mcp_server_url": self.client.url(),
-                        })));
-                    }
-                    Err(e) => return Err(e),
+        let auth_token: Option<String> =
+            match &self.auth {
+                McpAuth::None | McpAuth::Bearer => None, // Bearer already set on the client
+                McpAuth::UserOAuth { provider } => {
+                    let user = ctx.invoking_user.as_deref().ok_or_else(|| {
+                        CasperError::Forbidden(format!(
+                            "Tool '{}' requires user_oauth but no user context is available.",
+                            self.qualified_name
+                        ))
+                    })?;
+                    let resolver = ctx.token_resolver.as_ref().ok_or_else(|| {
+                        CasperError::Internal("token_resolver not configured".into())
+                    })?;
+                    Some(
+                        resolver
+                            .resolve_user_oauth(ctx.tenant_id, user, provider)
+                            .await?,
+                    )
                 }
-            }
-        };
+                McpAuth::McpOAuth => {
+                    let user = ctx.invoking_user.as_deref().ok_or_else(|| {
+                        CasperError::Forbidden(format!(
+                            "Tool '{}' requires MCP OAuth but no user context is available.",
+                            self.qualified_name
+                        ))
+                    })?;
+                    let resolver = ctx.token_resolver.as_ref().ok_or_else(|| {
+                        CasperError::Internal("token_resolver not configured".into())
+                    })?;
+                    match resolver
+                        .resolve_mcp_oauth(ctx.tenant_id, user, self.client.url())
+                        .await
+                    {
+                        Ok(token) => Some(token),
+                        Err(e) if e.to_string().contains("has not connected") => {
+                            // Signal the engine to start the MCP OAuth flow
+                            return Ok(ToolResult::ok(json!({
+                                "__mcp_oauth_required__": true,
+                                "mcp_server_url": self.client.url(),
+                            })));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            };
 
-        let result = self.client.call_tool_with_auth(
-            &self.remote_name,
-            input,
-            auth_token.as_deref(),
-        ).await;
+        let result = self
+            .client
+            .call_tool_with_auth(&self.remote_name, input, auth_token.as_deref())
+            .await;
 
         match result {
             Ok(result) => {
@@ -280,7 +287,8 @@ async fn resolve_user_oauth_token(
     // Real solution: add vault to ToolContext via an Arc<dyn TokenResolver> trait.
     Err(CasperError::Internal(
         "user_oauth token resolution requires vault access — not yet wired into agent runtime. \
-         Use the connection_service::resolve_user_token from the server layer instead.".into()
+         Use the connection_service::resolve_user_token from the server layer instead."
+            .into(),
     ))
 }
 

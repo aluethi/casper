@@ -1,6 +1,6 @@
 use clap::Subcommand;
 
-use crate::credentials::{remove_credentials, save_credentials, Credentials};
+use crate::credentials::{Credentials, remove_credentials, save_credentials};
 use crate::http::{authenticated_client, print_response};
 
 #[derive(Subcommand)]
@@ -88,10 +88,7 @@ pub async fn handle(cmd: AuthCmd) -> Result<(), String> {
         AuthCmd::Logout => {
             // Best-effort server-side logout.
             if let Ok((client, server)) = authenticated_client() {
-                let _ = client
-                    .post(format!("{server}/auth/logout"))
-                    .send()
-                    .await;
+                let _ = client.post(format!("{server}/auth/logout")).send().await;
             }
             remove_credentials()?;
             println!("Logged out. Credentials removed.");

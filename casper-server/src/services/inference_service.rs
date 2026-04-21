@@ -1,11 +1,11 @@
-use casper_base::{CasperError, Scope};
-use casper_base::scope::has_scope;
-use casper_catalog::{
-    check_quota, merge_params, resolve_deployment, resolve_deployment_by_id,
-    ResolvedBackend, ResolvedDeployment,
-};
 use casper_base::UsageEvent;
+use casper_base::scope::has_scope;
+use casper_base::{CasperError, Scope};
 use casper_catalog::{LlmRequest, LlmResponse, Message, dispatch_with_retry};
+use casper_catalog::{
+    ResolvedBackend, ResolvedDeployment, check_quota, merge_params, resolve_deployment,
+    resolve_deployment_by_id,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -113,10 +113,9 @@ pub async fn chat_completions(
         .iter()
         .map(|m| {
             let role_str = m["role"].as_str().unwrap_or("user");
-            let role: casper_catalog::MessageRole = serde_json::from_value(
-                serde_json::Value::String(role_str.to_string()),
-            )
-            .unwrap_or(casper_catalog::MessageRole::User);
+            let role: casper_catalog::MessageRole =
+                serde_json::from_value(serde_json::Value::String(role_str.to_string()))
+                    .unwrap_or(casper_catalog::MessageRole::User);
             let content = m.get("content").cloned().unwrap_or(serde_json::Value::Null);
             Message { role, content }
         })
@@ -232,8 +231,7 @@ pub async fn chat_completions(
                         fallback_id = %fallback_id,
                         "falling back to next deployment"
                     );
-                    deployment =
-                        resolve_deployment_by_id(&state.db_owner, fallback_id).await?;
+                    deployment = resolve_deployment_by_id(&state.db_owner, fallback_id).await?;
                 } else {
                     break;
                 }
@@ -241,9 +239,7 @@ pub async fn chat_completions(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        CasperError::Unavailable("all deployments exhausted".into())
-    }))
+    Err(last_error.unwrap_or_else(|| CasperError::Unavailable("all deployments exhausted".into())))
 }
 
 pub async fn list_models(
@@ -251,10 +247,7 @@ pub async fn list_models(
     tenant_id: Uuid,
     scopes: &[Scope],
 ) -> Result<ModelsListResponse, CasperError> {
-    let has_broad_scope = has_scope(
-        scopes,
-        &Scope::parse("inference:call").unwrap(),
-    );
+    let has_broad_scope = has_scope(scopes, &Scope::parse("inference:call").unwrap());
 
     #[derive(sqlx::FromRow)]
     struct DeploymentSlugRow {
@@ -330,8 +323,7 @@ async fn dispatch_with_agent_support<'a>(
 
         for attempt in 0..=deployment.retry_attempts {
             if attempt > 0 {
-                let delay_ms =
-                    deployment.retry_backoff_ms as u64 * (1u64 << (attempt as u64 - 1));
+                let delay_ms = deployment.retry_backoff_ms as u64 * (1u64 << (attempt as u64 - 1));
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
 
@@ -384,7 +376,5 @@ async fn dispatch_with_agent_support<'a>(
         );
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        CasperError::Unavailable("all backends exhausted".into())
-    }))
+    Err(last_error.unwrap_or_else(|| CasperError::Unavailable("all backends exhausted".into())))
 }

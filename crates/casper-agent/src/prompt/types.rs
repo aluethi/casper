@@ -56,8 +56,12 @@ pub struct DelegateAgent {
     pub when: String,
 }
 
-fn default_budget() -> i32 { 500 }
-fn default_on_missing() -> OnMissing { OnMissing::Skip }
+fn default_budget() -> i32 {
+    500
+}
+fn default_on_missing() -> OnMissing {
+    OnMissing::Skip
+}
 
 /// Datasource block configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +82,9 @@ pub enum DatasourceConfig {
     },
 }
 
-fn default_http_method() -> String { "GET".to_string() }
+fn default_http_method() -> String {
+    "GET".to_string()
+}
 
 /// What to do when a datasource's metadata variables are missing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
