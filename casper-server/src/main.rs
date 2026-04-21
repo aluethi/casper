@@ -127,6 +127,59 @@ async fn run_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+async fn bootstrap_admin(pool: &PgPool, email: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenant_users WHERE email = $1)")
+            .bind(email)
+            .fetch_one(pool)
+            .await?;
+
+    if exists {
+        return Ok(());
+    }
+
+    let tenant_id = Uuid::now_v7();
+    let slug = email
+        .split('@')
+        .nth(1)
+        .and_then(|d| d.split('.').next())
+        .unwrap_or("default");
+
+    sqlx::query(
+        "INSERT INTO tenants (id, slug, display_name)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (slug) DO UPDATE SET id = tenants.id
+         RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(slug)
+    .bind(slug)
+    .execute(pool)
+    .await?;
+
+    let actual_tenant_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM tenants WHERE slug = $1")
+            .bind(slug)
+            .fetch_one(pool)
+            .await?;
+
+    let subject = format!("user:{email}");
+    sqlx::query(
+        "INSERT INTO tenant_users (id, tenant_id, email, subject, role, scopes, created_by)
+         VALUES ($1, $2, $3, $4, 'owner', '{\"admin:*\"}', 'bootstrap')
+         ON CONFLICT (tenant_id, subject) DO NOTHING",
+    )
+    .bind(Uuid::now_v7())
+    .bind(actual_tenant_id)
+    .bind(email)
+    .bind(&subject)
+    .execute(pool)
+    .await?;
+
+    tracing::info!(email, tenant = slug, "bootstrapped admin user");
+    Ok(())
+}
+
 fn setup_signing_keys(config: &ServerConfig) -> (Option<Arc<JwtSigner>>, Option<Arc<JwtVerifier>>) {
     if config.auth.dev_auth {
         // In dev mode, generate ephemeral keys
@@ -211,6 +264,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     run_migrations(&owner_pool).await?;
     tracing::info!("Migrations complete");
+
+    if let Some(ref email) = config.auth.admin_email {
+        bootstrap_admin(&owner_pool, email).await?;
+    }
 
     // Start observability
     let (audit, _audit_handle) = AuditWriter::start(main_pool.clone(), 10_000);
