@@ -74,6 +74,20 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, SETGID, SETUID]
 
+  # ── Agent Backend (local inference sidecar) ─────────────────────
+  agent-backend:
+    image: ${ACR_AGENT_BACKEND_IMAGE:-casper-agent-backend:latest}
+    restart: unless-stopped
+    environment:
+      RUST_LOG: info
+    volumes:
+      - ./agent-backend.yaml:/etc/casper/config.yaml:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    profiles:
+      - agent-backend
+
 volumes:
   pgdata:
   knowledge_data:

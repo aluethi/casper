@@ -157,11 +157,10 @@ async fn bootstrap_admin(pool: &PgPool, email: &str) -> Result<(), Box<dyn std::
     .execute(pool)
     .await?;
 
-    let actual_tenant_id: Uuid =
-        sqlx::query_scalar("SELECT id FROM tenants WHERE slug = $1")
-            .bind(slug)
-            .fetch_one(pool)
-            .await?;
+    let actual_tenant_id: Uuid = sqlx::query_scalar("SELECT id FROM tenants WHERE slug = $1")
+        .bind(slug)
+        .fetch_one(pool)
+        .await?;
 
     let subject = format!("user:{email}");
     sqlx::query(

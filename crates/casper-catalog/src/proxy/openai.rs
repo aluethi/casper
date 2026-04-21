@@ -521,8 +521,8 @@ fn map_openai_error(status: u16, body: &str) -> CasperError {
 
 #[cfg(test)]
 mod tests {
-    use crate::proxy::types::Message;
     use super::*;
+    use crate::proxy::types::Message;
 
     #[test]
     fn build_messages_preserves_system() {

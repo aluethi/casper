@@ -1,0 +1,59 @@
+# ── Build stage ───────────────────────────────────────────────────
+FROM rust:1.94 AS builder
+
+WORKDIR /app
+
+# Copy manifests first for better layer caching
+COPY Cargo.toml Cargo.lock ./
+COPY crates/casper-base/Cargo.toml crates/casper-base/Cargo.toml
+COPY crates/casper-catalog/Cargo.toml crates/casper-catalog/Cargo.toml
+COPY crates/casper-agent/Cargo.toml crates/casper-agent/Cargo.toml
+COPY crates/casper-wire/Cargo.toml crates/casper-wire/Cargo.toml
+COPY casper-server/Cargo.toml casper-server/Cargo.toml
+COPY casper-cli/Cargo.toml casper-cli/Cargo.toml
+COPY casper-agent-backend/Cargo.toml casper-agent-backend/Cargo.toml
+
+# Create stub source files so cargo can resolve the workspace and cache deps
+RUN mkdir -p crates/casper-base/src && echo "pub fn _stub(){}" > crates/casper-base/src/lib.rs && \
+    mkdir -p crates/casper-catalog/src && echo "pub fn _stub(){}" > crates/casper-catalog/src/lib.rs && \
+    mkdir -p crates/casper-agent/src && echo "pub fn _stub(){}" > crates/casper-agent/src/lib.rs && \
+    mkdir -p crates/casper-wire/src && echo "pub fn _stub(){}" > crates/casper-wire/src/lib.rs && \
+    mkdir -p casper-server/src && echo "fn main(){}" > casper-server/src/main.rs && \
+    mkdir -p casper-cli/src && echo "fn main(){}" > casper-cli/src/main.rs && \
+    mkdir -p casper-agent-backend/src && echo "fn main(){}" > casper-agent-backend/src/main.rs
+
+# Pre-build dependencies (cached unless Cargo.toml/Cargo.lock change)
+RUN cargo build --release -p casper-agent-backend 2>/dev/null || true
+
+# Copy actual source code
+COPY crates/ crates/
+COPY casper-server/ casper-server/
+COPY casper-cli/ casper-cli/
+COPY casper-agent-backend/ casper-agent-backend/
+
+# Touch source files to invalidate the stub builds
+RUN find crates/ casper-agent-backend/ -name "*.rs" -exec touch {} +
+
+# Build the real binary
+RUN cargo build --release -p casper-agent-backend
+
+# ── Runtime stage ─────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates libssl3 && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 1000 casper && \
+    useradd --uid 1000 --gid casper --shell /bin/false casper
+
+COPY --from=builder /app/target/release/casper-agent-backend /usr/local/bin/casper-agent-backend
+
+RUN mkdir -p /etc/casper && chown casper:casper /etc/casper
+
+ENV RUST_LOG=info
+
+USER casper
+
+ENTRYPOINT ["casper-agent-backend"]
+CMD ["--config", "/etc/casper/config.yaml"]

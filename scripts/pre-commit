@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+echo "Running cargo fmt check..."
+cargo fmt --all -- --check
+
+echo "Running TypeScript check..."
+(cd web && npx tsc -b)
+
+echo "Running clippy..."
+cargo clippy --workspace -- -D warnings

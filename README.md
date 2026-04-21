@@ -96,22 +96,19 @@ curl http://localhost:3000/api/v1/agents \
 ```
 casper/
 |-- crates/
-|   |-- casper-base/          Shared types, JWT verification, RBAC scopes, errors
-|   |-- casper-db/            PgPool, TenantDb, RLS wrapper
-|   |-- casper-auth/          JWT signing, revocation cache
-|   |-- casper-vault/         Secret vault (AES-256-GCM, HKDF)
-|   |-- casper-observe/       Audit writer, usage tracking, Prometheus metrics
-|   |-- casper-catalog/       Model catalog, backends, quotas, deployment routing
-|   |-- casper-proxy/         LLM provider dispatch (Anthropic, OpenAI-compatible)
-|   |-- casper-knowledge/     RAG: ingestion, chunking, embeddings, retrieval
-|   |-- casper-mcp/           MCP client, tool discovery, elicitation forwarding
-|   +-- casper-agent/         Actors, ReAct loop, prompt assembler, built-in tools
+|   |-- casper-base/          Foundation: types, JWT, auth, DB pools, vault, observability
+|   |-- casper-catalog/       Model catalog, quotas, routing + LLM provider dispatch
+|   |-- casper-agent/         Actors, ReAct loop, prompt assembler, tools, MCP client
+|   +-- casper-wire/          Shared WebSocket protocol types
 |
 |-- casper-server/            Main binary: Axum routes, middleware, wiring
 |-- casper-cli/               CLI binary: thin HTTP client for casper-server
+|-- casper-agent-backend/     WebSocket sidecar for agent backend connections
 |-- web/                      React SPA (portal UI)
 |-- migrations/               SQL migration files
 |-- config/                   Server configuration (YAML)
+|-- infra/                    Azure Bicep IaC + Docker Compose (production)
+|-- scripts/                  Git hooks
 +-- data/                     Runtime data (knowledge files, not in git)
 ```
 
@@ -125,6 +122,16 @@ casper/
 | PostgreSQL  | 16+       |
 | pgvector    | 0.7+      |
 | Node.js     | 20+ (for web/) |
+
+### Git Hooks
+
+Set up the pre-commit hook to run format, type, and lint checks before each commit:
+
+```bash
+ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+```
+
+This runs `cargo fmt --check`, `tsc -b` (TypeScript), and `cargo clippy -D warnings`. The commit is blocked if any check fails.
 
 ### Database Setup
 

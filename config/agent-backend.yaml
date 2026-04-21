@@ -1,0 +1,13 @@
+# Casper Agent Backend — example config
+#
+# Each backend maps a Casper agent key to a local inference server.
+# Get your agent key from the Casper dashboard.
+#
+# Usage:
+#   docker compose --profile agent-backend up -d agent-backend
+
+casper_url: ws://app:3000/agent/connect
+
+backends:
+  - key: csa-REPLACE_ME
+    inference_url: http://host.docker.internal:11434  # Ollama on host

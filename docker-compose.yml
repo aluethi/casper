@@ -62,6 +62,21 @@ services:
       - SETGID
       - SETUID
 
+  # ── Agent Backend (local inference sidecar) ──────────────────────
+  agent-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-backend
+    environment:
+      RUST_LOG: info
+    volumes:
+      - ./config/agent-backend.yaml:/etc/casper/config.yaml:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    profiles:
+      - agent-backend
+
 volumes:
   pgdata:
   knowledge_data:
