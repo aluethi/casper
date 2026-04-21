@@ -94,13 +94,13 @@ pub async fn probe(http: &reqwest::Client, mcp_url: &str) -> Result<Option<Strin
         )
         .send()
         .await
-        .map_err(|e| McpError::Http(e))?;
+        .map_err(McpError::Http)?;
 
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-        if let Some(www_auth) = resp.headers().get("www-authenticate") {
-            if let Ok(header) = www_auth.to_str() {
-                return Ok(parse_resource_metadata_url(header));
-            }
+        if let Some(www_auth) = resp.headers().get("www-authenticate")
+            && let Ok(header) = www_auth.to_str()
+        {
+            return Ok(parse_resource_metadata_url(header));
         }
         return Err(McpError::InvalidResponse(
             "401 without WWW-Authenticate header".into(),

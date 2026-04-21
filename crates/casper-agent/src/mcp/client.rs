@@ -179,10 +179,10 @@ impl McpClient {
         }
 
         // Attach session ID from the initialize handshake
-        if let Some(sid) = self.session_id.get() {
-            if !sid.is_empty() {
-                http_req = http_req.header("Mcp-Session-Id", sid);
-            }
+        if let Some(sid) = self.session_id.get()
+            && !sid.is_empty()
+        {
+            http_req = http_req.header("Mcp-Session-Id", sid);
         }
 
         let http_resp = http_req.send().await?;

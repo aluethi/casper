@@ -33,9 +33,10 @@ pub async fn call(
     }
 
     // Convert OpenAI tool defs → Anthropic format
-    if let Some(ref tools) = request.tools {
-        if !tools.is_empty() {
-            let anthropic_tools: Vec<serde_json::Value> = tools
+    if let Some(ref tools) = request.tools
+        && !tools.is_empty()
+    {
+        let anthropic_tools: Vec<serde_json::Value> = tools
                 .iter()
                 .map(|t| {
                     // OpenAI: {type: "function", function: {name, description, parameters}}
@@ -52,8 +53,7 @@ pub async fn call(
                     }
                 })
                 .collect();
-            body["tools"] = json!(anthropic_tools);
-        }
+        body["tools"] = json!(anthropic_tools);
     }
 
     // Merge extra params (skip "system" — handled above)
@@ -120,9 +120,10 @@ pub async fn call_stream(
     if let Some(temp) = request.temperature {
         body["temperature"] = json!(temp);
     }
-    if let Some(ref tools) = request.tools {
-        if !tools.is_empty() {
-            let anthropic_tools: Vec<serde_json::Value> = tools
+    if let Some(ref tools) = request.tools
+        && !tools.is_empty()
+    {
+        let anthropic_tools: Vec<serde_json::Value> = tools
                 .iter()
                 .map(|t| {
                     if let Some(func) = t.get("function") {
@@ -136,8 +137,7 @@ pub async fn call_stream(
                     }
                 })
                 .collect();
-            body["tools"] = json!(anthropic_tools);
-        }
+        body["tools"] = json!(anthropic_tools);
     }
 
     if let serde_json::Value::Object(ref extra) = request.extra {
@@ -362,10 +362,10 @@ fn build_anthropic_messages(
     let mut out = Vec::new();
 
     // Check extra.system first
-    if let Some(s) = extra.get("system").and_then(|v| v.as_str()) {
-        if !s.is_empty() {
-            system = Some(json!(s));
-        }
+    if let Some(s) = extra.get("system").and_then(|v| v.as_str())
+        && !s.is_empty()
+    {
+        system = Some(json!(s));
     }
 
     for msg in messages {
@@ -378,10 +378,10 @@ fn build_anthropic_messages(
                 // Convert OpenAI assistant+tool_calls → Anthropic content blocks
                 let mut content_blocks: Vec<serde_json::Value> = Vec::new();
 
-                if let Some(text) = msg.content.get("content").and_then(|v| v.as_str()) {
-                    if !text.is_empty() {
-                        content_blocks.push(json!({"type": "text", "text": text}));
-                    }
+                if let Some(text) = msg.content.get("content").and_then(|v| v.as_str())
+                    && !text.is_empty()
+                {
+                    content_blocks.push(json!({"type": "text", "text": text}));
                 }
 
                 if let Some(tool_calls) = msg.content.get("tool_calls").and_then(|v| v.as_array()) {

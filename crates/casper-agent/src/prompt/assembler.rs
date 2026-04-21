@@ -14,31 +14,21 @@ use uuid::Uuid;
 
 use super::types::PromptBlock;
 
-// ── Prompt assembly ─────────────────────────────────────────────
-//
-// The assembled prompt follows a layered architecture:
-//
-//   Prompt stack blocks (text, environment, memory, delegates, etc.)
-//   Final — Tool reference (auto-generated from tools config)
-//
-// Knowledge blocks emit guidance to call knowledge_search when empty.
-// Variables are wrapped with section headings for behavioral context.
-// Tenant IDs are never exposed — only human-readable tenant names.
+pub struct PromptContext<'a> {
+    pub prompt_stack: &'a serde_json::Value,
+    pub tools_config: &'a serde_json::Value,
+    pub agent_name: &'a str,
+    pub tenant_id: Uuid,
+    pub tenant_name: &'a str,
+    pub db: &'a PgPool,
+    pub mcp_summaries: &'a HashMap<String, Vec<(String, String)>>,
+}
 
-pub async fn assemble_system_prompt(
-    prompt_stack: &serde_json::Value,
-    tools_config: &serde_json::Value,
-    agent_name: &str,
-    _agent_description: &str,
-    tenant_id: Uuid,
-    tenant_name: &str,
-    db: &PgPool,
-    mcp_summaries: &HashMap<String, Vec<(String, String)>>,
-) -> String {
-    let blocks: Vec<PromptBlock> = serde_json::from_value(prompt_stack.clone()).unwrap_or_default();
+pub async fn assemble_system_prompt(ctx: &PromptContext<'_>) -> String {
+    let blocks: Vec<PromptBlock> =
+        serde_json::from_value(ctx.prompt_stack.clone()).unwrap_or_default();
     let mut sections: Vec<String> = Vec::new();
 
-    // ── Prompt stack blocks, in order ──
     for block in &blocks {
         match block {
             PromptBlock::Text { content, .. } => {
@@ -82,42 +72,41 @@ pub async fn assemble_system_prompt(
                     "{weekday}, {day_month_year}, {utc_time} UTC ({local_time} {tz_abbr}, Europe/Zurich) — {quarter}, day {day_of_year}/{days_in_year}"
                 );
                 sections.push(format!(
-                    "Current date/time: {datetime_str}\nAgent: {agent_name}\nTenant: {tenant_name}"
+                    "Current date/time: {datetime_str}\nAgent: {}\nTenant: {}",
+                    ctx.agent_name, ctx.tenant_name
                 ));
             }
             PromptBlock::TenantMemory { .. } => {
                 let row: Option<(String,)> =
                     sqlx::query_as("SELECT content FROM tenant_memory WHERE tenant_id = $1")
-                        .bind(tenant_id)
-                        .fetch_optional(db)
+                        .bind(ctx.tenant_id)
+                        .fetch_optional(ctx.db)
                         .await
                         .ok()
                         .flatten();
-                if let Some((content,)) = row {
-                    if !content.is_empty() {
-                        sections.push(format!("## Shared Knowledge\n\n{content}"));
-                    }
+                if let Some((content,)) = row
+                    && !content.is_empty()
+                {
+                    sections.push(format!("## Shared Knowledge\n\n{content}"));
                 }
             }
             PromptBlock::AgentMemory { .. } => {
                 let row: Option<(String,)> = sqlx::query_as(
                     "SELECT content FROM agent_memory WHERE tenant_id = $1 AND agent_name = $2",
                 )
-                .bind(tenant_id)
-                .bind(agent_name)
-                .fetch_optional(db)
+                .bind(ctx.tenant_id)
+                .bind(ctx.agent_name)
+                .fetch_optional(ctx.db)
                 .await
                 .ok()
                 .flatten();
-                if let Some((content,)) = row {
-                    if !content.is_empty() {
-                        sections.push(format!("## Agent Memory\n\n{content}"));
-                    }
+                if let Some((content,)) = row
+                    && !content.is_empty()
+                {
+                    sections.push(format!("## Agent Memory\n\n{content}"));
                 }
             }
             PromptBlock::Knowledge { .. } => {
-                // Knowledge results are injected per-query by the engine.
-                // This guidance tells the agent to use the tool when the section is empty.
                 sections.push(
                     "## Knowledge Base Results\n\n\
                     (No results — the engine injects matching chunks here when the user's query\n\
@@ -154,9 +143,9 @@ pub async fn assemble_system_prompt(
                 let row: Option<(String,)> = sqlx::query_as(
                     "SELECT content FROM snippets WHERE tenant_id = $1 AND name = $2",
                 )
-                .bind(tenant_id)
+                .bind(ctx.tenant_id)
                 .bind(snippet_name.as_str())
-                .fetch_optional(db)
+                .fetch_optional(ctx.db)
                 .await
                 .ok()
                 .flatten();
@@ -164,15 +153,11 @@ pub async fn assemble_system_prompt(
                     sections.push(content);
                 }
             }
-            PromptBlock::Datasource { .. } => {
-                // Resolved at assembly time when metadata variables are available.
-                // Omitted when unavailable (controlled by on_missing: skip/fail).
-            }
+            PromptBlock::Datasource { .. } => {}
         }
     }
 
-    // ── Tool Reference (auto-generated from tools config) ──
-    let tool_doc = generate_tool_documentation(tools_config, mcp_summaries);
+    let tool_doc = generate_tool_documentation(ctx.tools_config, ctx.mcp_summaries);
     if !tool_doc.is_empty() {
         sections.push(tool_doc);
     }

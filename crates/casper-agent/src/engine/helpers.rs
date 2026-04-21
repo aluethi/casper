@@ -18,6 +18,15 @@ use crate::tools::{ToolDispatcher, ToolResult};
 
 use super::{AgentConfig, AgentConfigRow, AgentEngine, DEFAULT_MAX_TURNS};
 
+pub(crate) struct DelegationRequest<'a> {
+    pub target_agent: &'a str,
+    pub message: &'a str,
+    pub tenant_id: Uuid,
+    pub parent_agent: &'a str,
+    pub timeout_secs: u64,
+    pub max_depth: u32,
+}
+
 impl AgentEngine {
     /// Load the agent configuration from the database.
     pub(super) async fn load_agent_config(
@@ -26,7 +35,7 @@ impl AgentEngine {
         agent_name: &str,
     ) -> Result<AgentConfig, CasperError> {
         let row: Option<AgentConfigRow> = sqlx::query_as(
-            "SELECT model_deployment, description, prompt_stack, tools, config
+            "SELECT model_deployment, prompt_stack, tools, config
              FROM agents
              WHERE tenant_id = $1 AND name = $2 AND is_active = true",
         )
@@ -36,7 +45,7 @@ impl AgentEngine {
         .await
         .map_err(|e| CasperError::Internal(format!("DB error loading agent config: {e}")))?;
 
-        let (deployment_slug, description, prompt_stack, tools, config) = row.ok_or_else(|| {
+        let (deployment_slug, prompt_stack, tools, config) = row.ok_or_else(|| {
             CasperError::NotFound(format!("agent '{agent_name}' not found or inactive"))
         })?;
 
@@ -63,12 +72,11 @@ impl AgentEngine {
                 .flatten()
                 .unwrap_or_else(|| "Unknown".to_string());
 
+        let _ = config; // parsed above for max_turns/max_tokens/temperature
         Ok(AgentConfig {
             deployment_slug,
-            description: description.unwrap_or_default(),
             prompt_stack,
             tools: tools.clone(),
-            config,
             tenant_name,
             // Assembled later in run() after MCP tool discovery
             system_prompt: String::new(),
@@ -171,49 +179,38 @@ impl AgentEngine {
     /// Creates an ephemeral conversation for the child, runs the child agent's
     /// full ReAct loop, and returns its final response as a `ToolResult`.
     /// Respects timeout and max_depth from the delegate tool config.
-    pub(super) async fn execute_delegation(
-        &self,
-        target_agent: &str,
-        message: &str,
-        tenant_id: Uuid,
-        parent_agent: &str,
-        _correlation_id: Uuid,
-        timeout_secs: u64,
-        max_depth: u32,
-    ) -> ToolResult {
-        // Depth check
-        if self.delegation_depth >= max_depth {
+    pub(super) async fn execute_delegation(&self, req: &DelegationRequest<'_>) -> ToolResult {
+        if self.delegation_depth >= req.max_depth {
             return ToolResult::error(format!(
-                "Maximum delegation depth ({max_depth}) exceeded. \
-                 Cannot delegate from '{parent_agent}' to '{target_agent}'."
+                "Maximum delegation depth ({}) exceeded. \
+                 Cannot delegate from '{}' to '{}'.",
+                req.max_depth, req.parent_agent, req.target_agent,
             ));
         }
 
         tracing::info!(
-            from = %parent_agent,
-            to = %target_agent,
+            from = %req.parent_agent,
+            to = %req.target_agent,
             depth = self.delegation_depth + 1,
-            timeout_secs,
+            req.timeout_secs,
             "delegating to child agent"
         );
 
-        // Create an ephemeral conversation for the child
         let child_conv_id = Uuid::now_v7();
         if let Err(e) = sqlx::query(
             "INSERT INTO conversations (id, tenant_id, agent_name, status, title)
              VALUES ($1, $2, $3, 'active', $4)",
         )
         .bind(child_conv_id)
-        .bind(tenant_id)
-        .bind(target_agent)
-        .bind(format!("delegation from {parent_agent}"))
+        .bind(req.tenant_id)
+        .bind(req.target_agent)
+        .bind(format!("delegation from {}", req.parent_agent))
         .execute(&self.db)
         .await
         {
             return ToolResult::error(format!("Failed to create delegation conversation: {e}"));
         }
 
-        // Build a child engine at depth + 1
         let child_engine = AgentEngine {
             db: self.db.clone(),
             http_client: self.http_client.clone(),
@@ -224,15 +221,14 @@ impl AgentEngine {
             delegation_depth: self.delegation_depth + 1,
         };
 
-        let target_owned = target_agent.to_string();
-        let message_owned = message.to_string();
-        let parent_owned = parent_agent.to_string();
+        let target_owned = req.target_agent.to_string();
+        let message_owned = req.message.to_string();
+        let parent_owned = req.parent_agent.to_string();
 
-        // Box::pin to break async recursion (run → execute_delegation → run)
         let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
+            Duration::from_secs(req.timeout_secs),
             Box::pin(child_engine.run(
-                tenant_id,
+                req.tenant_id,
                 &target_owned,
                 child_conv_id,
                 &message_owned,
@@ -242,7 +238,6 @@ impl AgentEngine {
         )
         .await;
 
-        // Mark the ephemeral conversation as completed
         let _ = sqlx::query("UPDATE conversations SET status = 'completed' WHERE id = $1")
             .bind(child_conv_id)
             .execute(&self.db)
@@ -251,7 +246,7 @@ impl AgentEngine {
         match result {
             Ok(Ok(response)) => {
                 tracing::info!(
-                    from = %parent_agent,
+                    from = %parent_owned,
                     to = %target_owned,
                     child_llm_calls = response.usage.llm_calls,
                     child_tool_calls = response.usage.tool_calls,
@@ -261,7 +256,7 @@ impl AgentEngine {
             }
             Ok(Err(e)) => {
                 tracing::warn!(
-                    from = %parent_agent,
+                    from = %parent_owned,
                     to = %target_owned,
                     error = %e,
                     "delegation failed"
@@ -270,13 +265,14 @@ impl AgentEngine {
             }
             Err(_) => {
                 tracing::warn!(
-                    from = %parent_agent,
+                    from = %parent_owned,
                     to = %target_owned,
-                    timeout_secs,
+                    req.timeout_secs,
                     "delegation timed out"
                 );
                 ToolResult::error(format!(
-                    "Delegation to '{target_owned}' timed out after {timeout_secs}s"
+                    "Delegation to '{target_owned}' timed out after {}s",
+                    req.timeout_secs
                 ))
             }
         }

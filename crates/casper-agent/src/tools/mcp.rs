@@ -230,68 +230,6 @@ pub async fn discover_and_wrap(
     }
 }
 
-/// Resolve a user's OAuth access token from the user_connections table.
-///
-/// This is a lightweight read — it does NOT auto-refresh expired tokens.
-/// The full refresh logic lives in `connection_service::resolve_user_token` on the server.
-/// TODO: Add token refresh support here or call through to the server service.
-async fn resolve_user_oauth_token(
-    db: &sqlx::PgPool,
-    tenant_id: casper_base::TenantId,
-    user_subject: &str,
-    provider: &str,
-) -> Result<String, CasperError> {
-    let row: Option<(String, Option<time::OffsetDateTime>)> = sqlx::query_as(
-        "SELECT access_token_enc, token_expires_at
-         FROM user_connections
-         WHERE tenant_id = $1 AND user_subject = $2 AND provider = $3",
-    )
-    .bind(tenant_id.0)
-    .bind(user_subject)
-    .bind(provider)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
-
-    let (access_token_enc, expires_at) = row.ok_or_else(|| {
-        CasperError::Forbidden(format!(
-            "User '{user_subject}' has not connected '{provider}'. \
-             They need to connect it in Settings > Connections."
-        ))
-    })?;
-
-    // Check expiry
-    if let Some(ea) = expires_at {
-        if ea < time::OffsetDateTime::now_utc() {
-            return Err(CasperError::Forbidden(format!(
-                "User '{user_subject}'s '{provider}' token has expired. \
-                 They need to reconnect in Settings > Connections."
-            )));
-        }
-    }
-
-    // The token is encrypted — we need to decrypt it.
-    // The vault is not available in the agent crate. For now, return the encrypted value
-    // and let the caller handle decryption. In production, this should go through the
-    // server's connection_service which has vault access.
-    //
-    // FIXME: The agent crate doesn't have vault access. Two options:
-    // 1. Pass the vault into ToolContext (adds a dependency)
-    // 2. Have the server pre-resolve tokens before building the dispatcher
-    //
-    // For now, we store the access_token in plaintext in a separate column,
-    // or accept that the encrypted value needs vault decryption.
-    // The pragmatic short-term solution: the access_token_enc is passed to the MCP server.
-    // This won't work — the MCP server needs the raw token.
-    //
-    // Real solution: add vault to ToolContext via an Arc<dyn TokenResolver> trait.
-    Err(CasperError::Internal(
-        "user_oauth token resolution requires vault access — not yet wired into agent runtime. \
-         Use the connection_service::resolve_user_token from the server layer instead."
-            .into(),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

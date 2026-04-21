@@ -141,7 +141,7 @@ pub async fn list_available(
 pub async fn start_oauth_flow(
     db: &PgPool,
     vault: &casper_base::Vault,
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
     tenant_id: TenantId,
     user_subject: &str,
     provider_name: &str,
@@ -325,18 +325,15 @@ pub async fn disconnect(
     // Best-effort token revocation
     if let Ok(provider) =
         oauth_provider_service::load_provider_with_secret(db, vault, provider_name).await
+        && let Some(ref revocation_url) = provider.revocation_url
+        && let Some((ref access_enc, _)) = row
+        && let Ok(token) = vault.decrypt_value(tenant_id, access_enc)
     {
-        if let Some(ref revocation_url) = provider.revocation_url {
-            if let Some((ref access_enc, _)) = row {
-                if let Ok(token) = vault.decrypt_value(tenant_id, access_enc) {
-                    let _ = http_client
-                        .post(revocation_url)
-                        .form(&[("token", token.expose_str().unwrap_or(""))])
-                        .send()
-                        .await;
-                }
-            }
-        }
+        let _ = http_client
+            .post(revocation_url)
+            .form(&[("token", token.expose_str().unwrap_or(""))])
+            .send()
+            .await;
     }
 
     // Delete the connection
@@ -503,14 +500,14 @@ fn generate_random_string(len: usize) -> String {
     (0..len)
         .map(|_| {
             let idx = rng.random_range(0..62);
-            let c = if idx < 10 {
+
+            if idx < 10 {
                 (b'0' + idx) as char
             } else if idx < 36 {
                 (b'a' + idx - 10) as char
             } else {
                 (b'A' + idx - 36) as char
-            };
-            c
+            }
         })
         .collect()
 }

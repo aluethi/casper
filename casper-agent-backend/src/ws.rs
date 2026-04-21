@@ -174,13 +174,13 @@ async fn wait_for_ack(
 ) -> Result<RegisterAckConfig, Box<dyn std::error::Error>> {
     let timeout = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while let Some(msg) = ws_source.next().await {
-            if let Ok(tungstenite::Message::Text(text)) = msg {
-                if let Ok(WsMessage::RegisterAck(ack)) = serde_json::from_str(&text.to_string()) {
-                    if ack.status == "ok" {
-                        return Ok(ack.config);
-                    }
-                    return Err(format!("registration rejected: {}", ack.status).into());
+            if let Ok(tungstenite::Message::Text(text)) = msg
+                && let Ok(WsMessage::RegisterAck(ack)) = serde_json::from_str(text.as_ref())
+            {
+                if ack.status == "ok" {
+                    return Ok(ack.config);
                 }
+                return Err(format!("registration rejected: {}", ack.status).into());
             }
         }
         Err("connection closed before register_ack".into())

@@ -1,4 +1,4 @@
-use casper_agent::prompt::assemble_system_prompt;
+use casper_agent::prompt::{PromptContext, assemble_system_prompt};
 use casper_base::TenantDb;
 use casper_base::{CasperError, TenantId};
 use serde::{Deserialize, Serialize};
@@ -472,7 +472,7 @@ pub async fn preview_prompt(
         .await
         .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
-    let (agent_name, description, prompt_stack, tools) =
+    let (agent_name, _description, prompt_stack, tools) =
         row.ok_or_else(|| CasperError::NotFound(format!("agent '{name}'")))?;
 
     let tenant_name: String = sqlx::query_scalar("SELECT display_name FROM tenants WHERE id = $1")
@@ -487,16 +487,15 @@ pub async fn preview_prompt(
     let dispatcher = casper_agent::tools::build_dispatcher(&tools, http_client).await;
     let mcp_summaries = dispatcher.mcp_tool_summaries();
 
-    let prompt = assemble_system_prompt(
-        &prompt_stack,
-        &tools,
-        &agent_name,
-        description.as_deref().unwrap_or(""),
-        tenant_id.0,
-        &tenant_name,
+    let prompt = assemble_system_prompt(&PromptContext {
+        prompt_stack: &prompt_stack,
+        tools_config: &tools,
+        agent_name: &agent_name,
+        tenant_id: tenant_id.0,
+        tenant_name: &tenant_name,
         db,
-        &mcp_summaries,
-    )
+        mcp_summaries: &mcp_summaries,
+    })
     .await;
 
     Ok(prompt)

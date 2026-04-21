@@ -39,6 +39,7 @@ impl AuditWriter {
     }
 
     /// Convenience: log with common fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn log_action(
         &self,
         tenant_id: Uuid,

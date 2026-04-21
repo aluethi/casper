@@ -64,12 +64,12 @@ async fn reap_idle(registry: &ActorRegistry, timeout: Duration) {
     let mut reaped = 0;
 
     for key in &keys {
-        if let Some(last) = registry.last_activity(key).await {
-            if now.duration_since(last) > timeout {
-                tracing::info!(actor = %key, "reaping idle actor");
-                registry.remove(key);
-                reaped += 1;
-            }
+        if let Some(last) = registry.last_activity(key).await
+            && now.duration_since(last) > timeout
+        {
+            tracing::info!(actor = %key, "reaping idle actor");
+            registry.remove(key);
+            reaped += 1;
         }
     }
 

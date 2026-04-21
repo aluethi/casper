@@ -84,7 +84,7 @@ impl Role {
 
 impl PartialOrd for Role {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.rank().cmp(&other.rank()))
+        Some(self.cmp(other))
     }
 }
 
@@ -165,7 +165,7 @@ impl SecretValue {
         Self { inner: value }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_text(s: &str) -> Self {
         Self {
             inner: s.as_bytes().to_vec(),
         }
@@ -199,9 +199,9 @@ pub fn resolve_secret(key: &str) -> Result<SecretValue, String> {
     if let Ok(path) = std::env::var(&file_key) {
         let contents = std::fs::read_to_string(&path)
             .map_err(|e| format!("failed to read secret file {path}: {e}"))?;
-        Ok(SecretValue::from_str(contents.trim()))
+        Ok(SecretValue::from_text(contents.trim()))
     } else if let Ok(value) = std::env::var(key) {
-        Ok(SecretValue::from_str(&value))
+        Ok(SecretValue::from_text(&value))
     } else {
         Err(format!(
             "secret {key} not found (checked {key} and {file_key})"
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn secret_value_basics() {
-        let secret = SecretValue::from_str("hunter2");
+        let secret = SecretValue::from_text("hunter2");
         assert_eq!(secret.expose_str().unwrap(), "hunter2");
         assert_eq!(secret.expose(), b"hunter2");
     }

@@ -189,13 +189,13 @@ impl ToolDispatcher {
         let mut groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for tool in self.tools.values() {
             let name = tool.name();
-            if let Some(rest) = name.strip_prefix("mcp__") {
-                if let Some((server, _tool)) = rest.split_once("__") {
-                    groups
-                        .entry(server.to_string())
-                        .or_default()
-                        .push((name.to_string(), tool.description().to_string()));
-                }
+            if let Some(rest) = name.strip_prefix("mcp__")
+                && let Some((server, _tool)) = rest.split_once("__")
+            {
+                groups
+                    .entry(server.to_string())
+                    .or_default()
+                    .push((name.to_string(), tool.description().to_string()));
             }
         }
         // Sort tools within each server for deterministic output

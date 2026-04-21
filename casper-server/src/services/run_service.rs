@@ -273,9 +273,10 @@ pub async fn execute_run(
     let tid = TenantId(tenant_id);
     let tdb = TenantDb::new(state.db.clone(), tid);
 
-    if usage.llm_calls == 0 {
-        if let Ok(mut tx) = tdb.begin().await {
-            sqlx::query(
+    if usage.llm_calls == 0
+        && let Ok(mut tx) = tdb.begin().await
+    {
+        sqlx::query(
                 "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
                  VALUES ($1, $2, $3, 'user', $4, $5, $6)
                  ON CONFLICT DO NOTHING",
@@ -283,29 +284,28 @@ pub async fn execute_run(
             .bind(Uuid::now_v7())
             .bind(tenant_id)
             .bind(conversation_id)
-            .bind(&serde_json::Value::String(message.to_string()))
+            .bind(serde_json::Value::String(message.to_string()))
             .bind((message.len() / 4) as i32)
             .bind(author)
             .execute(&mut *tx)
             .await
             .ok();
 
-            sqlx::query(
+        sqlx::query(
                 "INSERT INTO messages (id, tenant_id, conversation_id, role, content, token_count, author)
                  VALUES ($1, $2, $3, 'assistant', $4, $5, $6)",
             )
             .bind(Uuid::now_v7())
             .bind(tenant_id)
             .bind(conversation_id)
-            .bind(&serde_json::Value::String(assistant_text.clone()))
+            .bind(serde_json::Value::String(assistant_text.clone()))
             .bind((assistant_text.len() / 4) as i32)
             .bind(agent_name)
             .execute(&mut *tx)
             .await
             .ok();
 
-            tx.commit().await.ok();
-        }
+        tx.commit().await.ok();
     }
 
     // Get the most recent assistant message for the response

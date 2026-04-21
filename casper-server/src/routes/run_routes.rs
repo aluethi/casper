@@ -137,7 +137,6 @@ async fn run_agent_stream(
     let state_clone = state.clone();
     let name_clone = name.clone();
     let message = body.message.clone();
-    let metadata = body.metadata.clone();
     let actor_clone = actor.clone();
 
     tokio::spawn(async move {
@@ -150,16 +149,15 @@ async fn run_agent_stream(
         );
 
         if let Err(e) = engine
-            .run_stream(
-                tenant_id.0,
-                &name_clone,
+            .run_stream(casper_agent::engine::RunStreamRequest {
+                tenant_id: tenant_id.0,
+                agent_name: name_clone,
                 conversation_id,
-                &message,
-                &actor_clone,
-                &metadata,
-                tx.clone(),
+                user_message: message,
+                author: actor_clone,
+                tx: tx.clone(),
                 ask_rx,
-            )
+            })
             .await
         {
             let _ = tx

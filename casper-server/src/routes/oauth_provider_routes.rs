@@ -3,7 +3,7 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    routing::{delete, get, patch, post},
+    routing::{get, post},
 };
 use casper_base::CasperError;
 use serde::{Deserialize, Serialize};

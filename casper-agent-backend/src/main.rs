@@ -60,19 +60,19 @@ impl SidecarConfig {
     /// Resolve all backend entries (merges single-key shorthand with backends list).
     pub fn all_backends(&self) -> Vec<BackendEntry> {
         let mut all = self.backends.clone();
-        if let Some(k) = &self.key {
-            if !all.iter().any(|b| b.key == *k) {
-                all.insert(
-                    0,
-                    BackendEntry {
-                        key: k.clone(),
-                        inference_url: self
-                            .inference_url
-                            .clone()
-                            .unwrap_or_else(default_inference_url),
-                    },
-                );
-            }
+        if let Some(k) = &self.key
+            && !all.iter().any(|b| b.key == *k)
+        {
+            all.insert(
+                0,
+                BackendEntry {
+                    key: k.clone(),
+                    inference_url: self
+                        .inference_url
+                        .clone()
+                        .unwrap_or_else(default_inference_url),
+                },
+            );
         }
         all
     }

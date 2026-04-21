@@ -25,6 +25,16 @@ use uuid::Uuid;
 use crate::actor::{AgentResponse, AgentUsage};
 use crate::tools::{ToolContext, ToolDispatcher};
 
+pub struct RunStreamRequest {
+    pub tenant_id: Uuid,
+    pub agent_name: String,
+    pub conversation_id: Uuid,
+    pub user_message: String,
+    pub author: String,
+    pub tx: mpsc::Sender<StreamEvent>,
+    pub ask_rx: mpsc::Receiver<String>,
+}
+
 #[cfg(test)]
 pub use llm::MockLlmCaller;
 pub use llm::{LlmCaller, RealLlmCaller};
@@ -38,10 +48,8 @@ const DEFAULT_MAX_TURNS: usize = 25;
 #[derive(Debug)]
 struct AgentConfig {
     pub deployment_slug: String,
-    pub description: String,
     pub prompt_stack: serde_json::Value,
     pub tools: serde_json::Value,
-    pub config: serde_json::Value,
     pub tenant_name: String,
     pub system_prompt: String,
     pub max_turns: i32,
@@ -51,11 +59,10 @@ struct AgentConfig {
 
 /// Row type for the agent config query.
 type AgentConfigRow = (
-    String,
-    Option<String>,
-    serde_json::Value,
-    serde_json::Value,
-    serde_json::Value,
+    String,            // deployment_slug
+    serde_json::Value, // prompt_stack
+    serde_json::Value, // tools
+    serde_json::Value, // config
 );
 
 // ── Agent engine ─────────────────────────────────────────────────
@@ -153,17 +160,17 @@ impl AgentEngine {
 
         // 3. Assemble system prompt (after MCP discovery so tool docs include MCP tools)
         let mcp_summaries = active_dispatcher.mcp_tool_summaries();
-        config.system_prompt = crate::prompt::assemble_system_prompt(
-            &config.prompt_stack,
-            &config.tools,
-            agent_name,
-            &config.description,
-            tenant_id,
-            &config.tenant_name,
-            &self.db,
-            &mcp_summaries,
-        )
-        .await;
+        config.system_prompt =
+            crate::prompt::assemble_system_prompt(&crate::prompt::PromptContext {
+                prompt_stack: &config.prompt_stack,
+                tools_config: &config.tools,
+                agent_name,
+                tenant_id,
+                tenant_name: &config.tenant_name,
+                db: &self.db,
+                mcp_summaries: &mcp_summaries,
+            })
+            .await;
         let system_prompt = config.system_prompt.clone();
         let tool_defs = active_dispatcher.tool_definitions();
 
@@ -330,36 +337,34 @@ impl AgentEngine {
                         .await;
 
                     // Intercept delegation sentinel — execute the child agent
-                    if let Ok(ref result) = tool_result {
-                        if result.content.get("__delegate__").and_then(|v| v.as_bool())
+                    if let Ok(ref result) = tool_result
+                        && result.content.get("__delegate__").and_then(|v| v.as_bool())
                             == Some(true)
-                        {
-                            let target = result.content["agent"].as_str().unwrap_or("");
-                            let child_msg = result.content["message"].as_str().unwrap_or("");
+                    {
+                        let target = result.content["agent"].as_str().unwrap_or("");
+                        let child_msg = result.content["message"].as_str().unwrap_or("");
 
-                            // Read timeout/max_depth from delegate tool config
-                            let delegate_cfg = config.tools["builtin"]
-                                .as_array()
-                                .and_then(|arr| arr.iter().find(|e| e["name"] == "delegate"));
-                            let timeout_secs = delegate_cfg
-                                .and_then(|c| c["timeout_secs"].as_u64())
-                                .unwrap_or(300);
-                            let max_depth = delegate_cfg
-                                .and_then(|c| c["max_depth"].as_u64())
-                                .unwrap_or(3) as u32;
+                        // Read timeout/max_depth from delegate tool config
+                        let delegate_cfg = config.tools["builtin"]
+                            .as_array()
+                            .and_then(|arr| arr.iter().find(|e| e["name"] == "delegate"));
+                        let timeout_secs = delegate_cfg
+                            .and_then(|c| c["timeout_secs"].as_u64())
+                            .unwrap_or(300);
+                        let max_depth = delegate_cfg
+                            .and_then(|c| c["max_depth"].as_u64())
+                            .unwrap_or(3) as u32;
 
-                            tool_result = Ok(self
-                                .execute_delegation(
-                                    target,
-                                    child_msg,
-                                    tenant_id,
-                                    agent_name,
-                                    correlation_id,
-                                    timeout_secs,
-                                    max_depth,
-                                )
-                                .await);
-                        }
+                        tool_result = Ok(self
+                            .execute_delegation(&helpers::DelegationRequest {
+                                target_agent: target,
+                                message: child_msg,
+                                tenant_id,
+                                parent_agent: agent_name,
+                                timeout_secs,
+                                max_depth,
+                            })
+                            .await);
                     }
 
                     usage.tool_calls += 1;
@@ -489,17 +494,14 @@ impl AgentEngine {
     /// Streaming variant of `run`. Sends `StreamEvent`s through `tx` as the
     /// ReAct loop progresses: thinking, content deltas, tool calls, tool results.
     /// Returns the same `AgentResponse` as `run()` for DB persistence.
-    pub async fn run_stream(
-        &self,
-        tenant_id: Uuid,
-        agent_name: &str,
-        conversation_id: Uuid,
-        user_message: &str,
-        author: &str,
-        _metadata: &serde_json::Value,
-        tx: mpsc::Sender<StreamEvent>,
-        mut ask_rx: mpsc::Receiver<String>,
-    ) -> Result<AgentResponse, CasperError> {
+    pub async fn run_stream(&self, req: RunStreamRequest) -> Result<AgentResponse, CasperError> {
+        let tenant_id = req.tenant_id;
+        let conversation_id = req.conversation_id;
+        let tx = req.tx;
+        let mut ask_rx = req.ask_rx;
+        let agent_name: &str = &req.agent_name;
+        let user_message: &str = &req.user_message;
+        let author: &str = &req.author;
         let correlation_id = Uuid::now_v7();
         let start = Instant::now();
 
@@ -516,17 +518,17 @@ impl AgentEngine {
         };
 
         let mcp_summaries = active_dispatcher.mcp_tool_summaries();
-        config.system_prompt = crate::prompt::assemble_system_prompt(
-            &config.prompt_stack,
-            &config.tools,
-            agent_name,
-            &config.description,
-            tenant_id,
-            &config.tenant_name,
-            &self.db,
-            &mcp_summaries,
-        )
-        .await;
+        config.system_prompt =
+            crate::prompt::assemble_system_prompt(&crate::prompt::PromptContext {
+                prompt_stack: &config.prompt_stack,
+                tools_config: &config.tools,
+                agent_name,
+                tenant_id,
+                tenant_name: &config.tenant_name,
+                db: &self.db,
+                mcp_summaries: &mcp_summaries,
+            })
+            .await;
         let system_prompt = config.system_prompt.clone();
         let tool_defs = active_dispatcher.tool_definitions();
 
@@ -667,95 +669,92 @@ impl AgentEngine {
                         .await;
 
                     // Handle delegation sentinel
-                    if let Ok(ref result) = tool_result {
-                        if result.content.get("__delegate__").and_then(|v| v.as_bool())
+                    if let Ok(ref result) = tool_result
+                        && result.content.get("__delegate__").and_then(|v| v.as_bool())
                             == Some(true)
-                        {
-                            let target = result.content["agent"].as_str().unwrap_or("");
-                            let child_msg = result.content["message"].as_str().unwrap_or("");
-                            let delegate_cfg = config.tools["builtin"]
-                                .as_array()
-                                .and_then(|arr| arr.iter().find(|e| e["name"] == "delegate"));
-                            let timeout_secs = delegate_cfg
-                                .and_then(|c| c["timeout_secs"].as_u64())
-                                .unwrap_or(300);
-                            let max_depth = delegate_cfg
-                                .and_then(|c| c["max_depth"].as_u64())
-                                .unwrap_or(3) as u32;
-                            tool_result = Ok(self
-                                .execute_delegation(
-                                    target,
-                                    child_msg,
-                                    tenant_id,
-                                    agent_name,
-                                    correlation_id,
-                                    timeout_secs,
-                                    max_depth,
-                                )
-                                .await);
-                        }
+                    {
+                        let target = result.content["agent"].as_str().unwrap_or("");
+                        let child_msg = result.content["message"].as_str().unwrap_or("");
+                        let delegate_cfg = config.tools["builtin"]
+                            .as_array()
+                            .and_then(|arr| arr.iter().find(|e| e["name"] == "delegate"));
+                        let timeout_secs = delegate_cfg
+                            .and_then(|c| c["timeout_secs"].as_u64())
+                            .unwrap_or(300);
+                        let max_depth = delegate_cfg
+                            .and_then(|c| c["max_depth"].as_u64())
+                            .unwrap_or(3) as u32;
+                        tool_result = Ok(self
+                            .execute_delegation(&helpers::DelegationRequest {
+                                target_agent: target,
+                                message: child_msg,
+                                tenant_id,
+                                parent_agent: agent_name,
+                                timeout_secs,
+                                max_depth,
+                            })
+                            .await);
                     }
 
                     // Handle ask_user sentinel — pause and wait for user input
-                    if let Ok(ref result) = tool_result {
-                        if result.content.get("__ask_user__").and_then(|v| v.as_bool())
+                    if let Ok(ref result) = tool_result
+                        && result.content.get("__ask_user__").and_then(|v| v.as_bool())
                             == Some(true)
-                        {
-                            let question = result.content["question"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string();
-                            let options: Vec<String> = result.content["options"]
-                                .as_array()
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
+                    {
+                        let question = result.content["question"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
+                        let options: Vec<String> = result.content["options"]
+                            .as_array()
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
 
-                            let question_id = Uuid::now_v7().to_string();
+                        let question_id = Uuid::now_v7().to_string();
 
-                            // Send the question to the client
-                            let _ = tx
-                                .send(StreamEvent::AskUser {
-                                    question_id: question_id.clone(),
-                                    question: question.clone(),
-                                    options: options.clone(),
-                                })
-                                .await;
-
-                            tracing::info!(
-                                agent = %agent_name,
-                                question_id = %question_id,
-                                question = %question,
-                                "waiting for user input"
-                            );
-
-                            // Wait for the user's answer (5-minute timeout)
-                            let answer = tokio::time::timeout(
-                                std::time::Duration::from_secs(300),
-                                ask_rx.recv(),
-                            )
+                        // Send the question to the client
+                        let _ = tx
+                            .send(StreamEvent::AskUser {
+                                question_id: question_id.clone(),
+                                question: question.clone(),
+                                options: options.clone(),
+                            })
                             .await;
 
-                            let answer_text = match answer {
-                                Ok(Some(text)) => text,
-                                Ok(None) => "User did not respond (channel closed).".to_string(),
-                                Err(_) => "User did not respond within 5 minutes.".to_string(),
-                            };
+                        tracing::info!(
+                            agent = %agent_name,
+                            question_id = %question_id,
+                            question = %question,
+                            "waiting for user input"
+                        );
 
-                            tracing::info!(
-                                agent = %agent_name,
-                                question_id = %question_id,
-                                answer_len = answer_text.len(),
-                                "received user input"
-                            );
+                        // Wait for the user's answer (5-minute timeout)
+                        let answer = tokio::time::timeout(
+                            std::time::Duration::from_secs(300),
+                            ask_rx.recv(),
+                        )
+                        .await;
 
-                            tool_result = Ok(crate::tools::ToolResult::ok(
-                                serde_json::Value::String(answer_text),
-                            ));
-                        }
+                        let answer_text = match answer {
+                            Ok(Some(text)) => text,
+                            Ok(None) => "User did not respond (channel closed).".to_string(),
+                            Err(_) => "User did not respond within 5 minutes.".to_string(),
+                        };
+
+                        tracing::info!(
+                            agent = %agent_name,
+                            question_id = %question_id,
+                            answer_len = answer_text.len(),
+                            "received user input"
+                        );
+
+                        tool_result = Ok(crate::tools::ToolResult::ok(serde_json::Value::String(
+                            answer_text,
+                        )));
                     }
 
                     // Handle missing user_oauth connection — prompt to connect
@@ -807,63 +806,62 @@ impl AgentEngine {
                     }
 
                     // Handle MCP OAuth 2.1 required sentinel
-                    if let Ok(ref result) = tool_result {
-                        if result
+                    if let Ok(ref result) = tool_result
+                        && result
                             .content
                             .get("__mcp_oauth_required__")
                             .and_then(|v| v.as_bool())
                             == Some(true)
-                        {
-                            let mcp_url = result.content["mcp_server_url"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string();
+                    {
+                        let mcp_url = result.content["mcp_server_url"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
 
-                            // Try to start the OAuth flow via the token resolver
-                            let auth_url = if let (Some(user), Some(resolver)) = (
-                                tool_ctx.invoking_user.as_deref(),
-                                tool_ctx.token_resolver.as_ref(),
-                            ) {
-                                resolver
-                                    .start_mcp_oauth_flow(tenant_id, user, &mcp_url)
-                                    .await
-                                    .ok()
-                            } else {
-                                None
-                            };
+                        // Try to start the OAuth flow via the token resolver
+                        let auth_url = if let (Some(user), Some(resolver)) = (
+                            tool_ctx.invoking_user.as_deref(),
+                            tool_ctx.token_resolver.as_ref(),
+                        ) {
+                            resolver
+                                .start_mcp_oauth_flow(tenant_id, user, &mcp_url)
+                                .await
+                                .ok()
+                        } else {
+                            None
+                        };
 
-                            if let Some(auth_url) = auth_url {
-                                let _ = tx
-                                    .send(StreamEvent::McpOAuthRequired {
-                                        mcp_server_url: mcp_url.clone(),
-                                        authorization_url: auth_url,
-                                    })
-                                    .await;
-
-                                // Wait for user to complete OAuth
-                                let connected = tokio::time::timeout(
-                                    std::time::Duration::from_secs(300),
-                                    ask_rx.recv(),
-                                )
+                        if let Some(auth_url) = auth_url {
+                            let _ = tx
+                                .send(StreamEvent::McpOAuthRequired {
+                                    mcp_server_url: mcp_url.clone(),
+                                    authorization_url: auth_url,
+                                })
                                 .await;
 
-                                match connected {
-                                    Ok(Some(_)) => {
-                                        tool_result = active_dispatcher
-                                            .dispatch(tool_name, tool_input.clone(), &tool_ctx)
-                                            .await;
-                                    }
-                                    _ => {
-                                        tool_result = Ok(crate::tools::ToolResult::error(
-                                            "User did not complete MCP OAuth within the timeout.",
-                                        ));
-                                    }
+                            // Wait for user to complete OAuth
+                            let connected = tokio::time::timeout(
+                                std::time::Duration::from_secs(300),
+                                ask_rx.recv(),
+                            )
+                            .await;
+
+                            match connected {
+                                Ok(Some(_)) => {
+                                    tool_result = active_dispatcher
+                                        .dispatch(tool_name, tool_input.clone(), &tool_ctx)
+                                        .await;
                                 }
-                            } else {
-                                tool_result = Ok(crate::tools::ToolResult::error(format!(
-                                    "MCP server at {mcp_url} requires OAuth but the flow could not be started."
-                                )));
+                                _ => {
+                                    tool_result = Ok(crate::tools::ToolResult::error(
+                                        "User did not complete MCP OAuth within the timeout.",
+                                    ));
+                                }
                             }
+                        } else {
+                            tool_result = Ok(crate::tools::ToolResult::error(format!(
+                                "MCP server at {mcp_url} requires OAuth but the flow could not be started."
+                            )));
                         }
                     }
 

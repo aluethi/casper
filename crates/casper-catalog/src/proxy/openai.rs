@@ -46,10 +46,10 @@ async fn call_with_variant(
     // OpenAI uses system messages inline — if extra.system is set,
     // prepend it as a system message (this is how the agent engine passes
     // the assembled system prompt).
-    if let Some(system) = request.extra.get("system").and_then(|v| v.as_str()) {
-        if !system.is_empty() {
-            messages.insert(0, json!({ "role": "system", "content": system }));
-        }
+    if let Some(system) = request.extra.get("system").and_then(|v| v.as_str())
+        && !system.is_empty()
+    {
+        messages.insert(0, json!({ "role": "system", "content": system }));
     }
 
     let mut body = json!({
@@ -71,10 +71,10 @@ async fn call_with_variant(
         body["temperature"] = json!(temp);
     }
 
-    if let Some(ref tools) = request.tools {
-        if !tools.is_empty() {
-            body["tools"] = json!(tools);
-        }
+    if let Some(ref tools) = request.tools
+        && !tools.is_empty()
+    {
+        body["tools"] = json!(tools);
     }
 
     // Merge extra params (skip keys already handled above)
@@ -176,10 +176,10 @@ async fn call_stream_with_variant(
 ) -> Result<LlmResponse, CasperError> {
     let mut messages = build_messages(&request.messages);
 
-    if let Some(system) = request.extra.get("system").and_then(|v| v.as_str()) {
-        if !system.is_empty() {
-            messages.insert(0, json!({ "role": "system", "content": system }));
-        }
+    if let Some(system) = request.extra.get("system").and_then(|v| v.as_str())
+        && !system.is_empty()
+    {
+        messages.insert(0, json!({ "role": "system", "content": system }));
     }
 
     let mut body = json!({
@@ -200,10 +200,10 @@ async fn call_stream_with_variant(
     if let Some(temp) = request.temperature {
         body["temperature"] = json!(temp);
     }
-    if let Some(ref tools) = request.tools {
-        if !tools.is_empty() {
-            body["tools"] = json!(tools);
-        }
+    if let Some(ref tools) = request.tools
+        && !tools.is_empty()
+    {
+        body["tools"] = json!(tools);
     }
 
     if let serde_json::Value::Object(ref extra) = request.extra {
@@ -295,10 +295,10 @@ async fn call_stream_with_variant(
                 Err(_) => continue,
             };
 
-            if let Some(m) = data["model"].as_str() {
-                if model.is_empty() {
-                    model = m.to_string();
-                }
+            if let Some(m) = data["model"].as_str()
+                && model.is_empty()
+            {
+                model = m.to_string();
             }
 
             // Usage (sent in the final chunk)
@@ -314,27 +314,27 @@ async fn call_stream_with_variant(
                 let delta = &choice["delta"];
 
                 // Content
-                if let Some(c) = delta["content"].as_str() {
-                    if !c.is_empty() {
-                        content_parts.push(c.to_string());
-                        let _ = tx
-                            .send(StreamEvent::ContentDelta {
-                                delta: c.to_string(),
-                            })
-                            .await;
-                    }
+                if let Some(c) = delta["content"].as_str()
+                    && !c.is_empty()
+                {
+                    content_parts.push(c.to_string());
+                    let _ = tx
+                        .send(StreamEvent::ContentDelta {
+                            delta: c.to_string(),
+                        })
+                        .await;
                 }
 
                 // Thinking / reasoning
-                if let Some(r) = delta["reasoning_content"].as_str() {
-                    if !r.is_empty() {
-                        thinking_parts.push(r.to_string());
-                        let _ = tx
-                            .send(StreamEvent::Thinking {
-                                delta: r.to_string(),
-                            })
-                            .await;
-                    }
+                if let Some(r) = delta["reasoning_content"].as_str()
+                    && !r.is_empty()
+                {
+                    thinking_parts.push(r.to_string());
+                    let _ = tx
+                        .send(StreamEvent::Thinking {
+                            delta: r.to_string(),
+                        })
+                        .await;
                 }
 
                 // Tool calls (streamed incrementally by index)
@@ -419,10 +419,10 @@ fn build_messages(messages: &[super::types::Message]) -> Vec<serde_json::Value> 
             if msg.role == MessageRole::Assistant && msg.content.get("tool_calls").is_some() {
                 // Assistant message with tool calls
                 let mut m = json!({ "role": "assistant" });
-                if let Some(c) = msg.content.get("content") {
-                    if !c.is_null() {
-                        m["content"] = c.clone();
-                    }
+                if let Some(c) = msg.content.get("content")
+                    && !c.is_null()
+                {
+                    m["content"] = c.clone();
                 }
                 if let Some(tc) = msg.content.get("tool_calls") {
                     m["tool_calls"] = tc.clone();

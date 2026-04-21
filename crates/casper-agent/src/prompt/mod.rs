@@ -24,6 +24,6 @@ pub mod assembler;
 pub mod history;
 pub mod types;
 
-pub use assembler::assemble_system_prompt;
+pub use assembler::{PromptContext, assemble_system_prompt};
 pub use history::load_conversation_history;
 pub use types::*;

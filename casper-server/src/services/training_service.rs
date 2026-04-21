@@ -90,14 +90,14 @@ pub async fn export(
     }
 
     // Validate tier if provided
-    if let Some(ref tier) = params.tier {
-        if !VALID_TIERS.contains(&tier.as_str()) {
-            return Err(CasperError::BadRequest(format!(
-                "invalid tier '{}', must be one of: {}",
-                tier,
-                VALID_TIERS.join(", ")
-            )));
-        }
+    if let Some(ref tier) = params.tier
+        && !VALID_TIERS.contains(&tier.as_str())
+    {
+        return Err(CasperError::BadRequest(format!(
+            "invalid tier '{}', must be one of: {}",
+            tier,
+            VALID_TIERS.join(", ")
+        )));
     }
 
     if params.format == "pairs" {
