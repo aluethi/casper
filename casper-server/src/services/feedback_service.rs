@@ -89,9 +89,7 @@ pub async fn create(
                 ));
             }
         },
-        "correction"
-            if req.correction.is_none() || req.correction.as_deref() == Some("") =>
-        {
+        "correction" if req.correction.is_none() || req.correction.as_deref() == Some("") => {
             return Err(CasperError::BadRequest(
                 "correction field is required for feedback_type 'correction'".into(),
             ));

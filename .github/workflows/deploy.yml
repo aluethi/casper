@@ -44,8 +44,8 @@ env:
   RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'rg-casper' }}
   LOCATION: ${{ vars.LOCATION || 'switzerlandnorth' }}
   VM_USER: casperadmin
-  FRONT_DOOR_ID: ${{ vars.FRONT_DOOR_ID }}
-  FRONT_DOOR_HOSTNAME: ${{ vars.FRONT_DOOR_HOSTNAME }}
+  FRONT_DOOR_ID: ${{ vars.FRONT_DOOR_ID || secrets.FRONT_DOOR_ID }}
+  FRONT_DOOR_HOSTNAME: ${{ vars.FRONT_DOOR_HOSTNAME || secrets.FRONT_DOOR_HOSTNAME }}
 
 jobs:
   deploy:
@@ -147,8 +147,16 @@ jobs:
               "CASPER_ADMIN_EMAIL=admin@ventoo.ch" \
               > .env
 
-            # Pull and (re)start
+            # Pull latest image
             docker compose -f docker-compose.prod.yml pull
+
+            # Extract frontend assets from the app image
+            rm -rf /opt/casper/web
+            docker create --name casper-extract ${{ steps.infra.outputs.acrLoginServer }}/casper-server:${{ github.sha }} 2>/dev/null
+            docker cp casper-extract:/var/lib/casper/web /opt/casper/web
+            docker rm casper-extract
+
+            # Start services
             docker compose -f docker-compose.prod.yml up -d
 
       # ── Summary ─────────────────────────────────────────────────

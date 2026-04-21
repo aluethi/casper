@@ -1,4 +1,15 @@
-# ── Build stage ───────────────────────────────────────────────────
+# ── Frontend build stage ──────────────────────────────────────────
+FROM node:22-slim AS frontend
+
+WORKDIR /app
+
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci
+
+COPY web/ .
+RUN npm run build
+
+# ── Backend build stage ──────────────────────────────────────────
 FROM rust:1.94 AS builder
 
 WORKDIR /app
@@ -14,7 +25,6 @@ COPY casper-cli/Cargo.toml casper-cli/Cargo.toml
 COPY casper-agent-backend/Cargo.toml casper-agent-backend/Cargo.toml
 
 # Create stub source files so cargo can resolve the workspace and cache deps.
-# This avoids re-downloading all dependencies when only source code changes.
 RUN mkdir -p crates/casper-base/src && echo "pub fn _stub(){}" > crates/casper-base/src/lib.rs && \
     mkdir -p crates/casper-catalog/src && echo "pub fn _stub(){}" > crates/casper-catalog/src/lib.rs && \
     mkdir -p crates/casper-agent/src && echo "pub fn _stub(){}" > crates/casper-agent/src/lib.rs && \
@@ -52,6 +62,9 @@ RUN groupadd --gid 1000 casper && \
 
 # Copy binary
 COPY --from=builder /app/target/release/casper-server /usr/local/bin/casper-server
+
+# Copy frontend build output
+COPY --from=frontend /app/dist /var/lib/casper/web
 
 # Copy default config
 COPY config/casper-server.yaml /etc/casper/casper-server.yaml

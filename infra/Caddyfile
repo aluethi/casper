@@ -1,9 +1,33 @@
 :80 {
-	# Validate requests come from Azure Front Door
 	@not_frontdoor {
 		not header X-Azure-FDID {$FRONT_DOOR_ID}
 	}
 	respond @not_frontdoor 403
 
-	reverse_proxy app:3000
+	# API and auth routes → backend
+	handle /api/* {
+		reverse_proxy app:3000
+	}
+	handle /auth/* {
+		reverse_proxy app:3000
+	}
+	handle /v1/* {
+		reverse_proxy app:3000
+	}
+	handle /health {
+		reverse_proxy app:3000
+	}
+	handle /metrics {
+		reverse_proxy app:3000
+	}
+	handle /agent/* {
+		reverse_proxy app:3000
+	}
+
+	# Everything else → frontend SPA
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
 }

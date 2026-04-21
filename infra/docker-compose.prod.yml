@@ -16,6 +16,7 @@ services:
       - "80:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web:/srv/web:ro
     depends_on:
       app:
         condition: service_healthy
