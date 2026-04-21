@@ -1,14 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════
-// Casper Platform — Azure Infrastructure
+// Casper Platform — Azure VM Deployment
 // ═══════════════════════════════════════════════════════════════════
 //
-// Deploys: Container Registry, PostgreSQL 16 + pgvector,
-//          Container Apps Environment, casper-server Container App
+// Deploys a single VM running Docker Compose (casper-server, PostgreSQL,
+// SearXNG, Caddy reverse proxy) plus an ACR for the Docker image.
 //
 // Usage:
-//   az group create -n rg-casper-dev -l switzerlandnorth
-//   az deployment group create -g rg-casper-dev -f infra/main.bicep \
-//     -p postgresPassword='<secure>' env=dev
+//   az group create -n rg-casper -l switzerlandnorth
+//   az deployment group create -g rg-casper -f infra/main.bicep \
+//     -p sshPublicKey="$(cat ~/.ssh/casper-deploy.pub)"
 //
 // The GitHub Actions workflow (deploy.yml) automates this.
 
@@ -16,48 +16,136 @@ targetScope = 'resourceGroup'
 
 // ── Parameters ──────────────────────────────────────────────────
 
-@description('Azure region for all resources')
+@description('Azure region')
 param location string = resourceGroup().location
 
-@description('Environment name')
-@allowed(['dev', 'staging', 'prod'])
-param env string = 'dev'
+@description('SSH public key for VM access')
+param sshPublicKey string
 
-@description('PostgreSQL administrator password')
-@secure()
-param postgresPassword string
+@description('VM admin username')
+param adminUsername string = 'casperadmin'
 
-@description('Vault master key (base64-encoded, 32 bytes). Empty = dev mode.')
-@secure()
-param masterKey string = ''
-
-@description('Admin email for bootstrapped platform admin user')
-param adminEmail string = 'admin@ventoo.ch'
-
-@description('Full container image to deploy. Defaults to a quickstart image for initial deploy.')
-param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
+@description('VM size')
+param vmSize string = 'Standard_B2s'
 
 // ── Variables ───────────────────────────────────────────────────
 
-var prefix = 'casper-${env}'
 var uniqueSuffix = uniqueString(resourceGroup().id)
 var acrName = 'acrcasper${uniqueSuffix}'
-var isDevAuth = empty(masterKey)
+var vmName = 'vm-casper'
+var dnsLabel = 'casper-${uniqueSuffix}'
 
-// PostgreSQL
-var pgServerName = 'psql-${prefix}'
-var pgAdminUser = 'casperadmin'
-var pgDbName = 'casper'
-var pgConnStr = 'postgresql://${pgAdminUser}:${postgresPassword}@${pgServerName}.postgres.database.azure.com:5432/${pgDbName}?sslmode=require'
+var cloudInit = format('''
+#cloud-config
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
 
-// ── Log Analytics ───────────────────────────────────────────────
+runcmd:
+  # Install Docker Engine (official repo)
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - systemctl enable docker
+  - usermod -aG docker {0}
+  - mkdir -p /opt/casper
+  - chown {0}:{0} /opt/casper
+''', adminUsername)
 
-resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
-  name: 'log-${prefix}'
+// ── Networking ──────────────────────────────────────────────────
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
+  name: 'vnet-casper'
   location: location
   properties: {
-    sku: { name: 'PerGB2018' }
-    retentionInDays: 30
+    addressSpace: { addressPrefixes: ['10.0.0.0/16'] }
+    subnets: [
+      {
+        name: 'default'
+        properties: { addressPrefix: '10.0.0.0/24' }
+      }
+    ]
+  }
+}
+
+resource nsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
+  name: 'nsg-casper'
+  location: location
+  properties: {
+    securityRules: [
+      {
+        name: 'SSH'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '22'
+        }
+      }
+      {
+        name: 'HTTP'
+        properties: {
+          priority: 200
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '80'
+        }
+      }
+      {
+        name: 'HTTPS'
+        properties: {
+          priority: 300
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '443'
+        }
+      }
+    ]
+  }
+}
+
+resource publicIp 'Microsoft.Network/publicIPAddresses@2024-01-01' = {
+  name: 'pip-casper'
+  location: location
+  sku: { name: 'Standard' }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+    dnsSettings: { domainNameLabel: dnsLabel }
+  }
+}
+
+resource nic 'Microsoft.Network/networkInterfaces@2024-01-01' = {
+  name: 'nic-casper'
+  location: location
+  properties: {
+    networkSecurityGroup: { id: nsg.id }
+    ipConfigurations: [
+      {
+        name: 'ipconfig1'
+        properties: {
+          subnet: { id: vnet.properties.subnets[0].id }
+          publicIPAddress: { id: publicIp.id }
+          privateIPAllocationMethod: 'Dynamic'
+        }
+      }
+    ]
   }
 }
 
@@ -70,149 +158,52 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
   properties: { adminUserEnabled: true }
 }
 
-// ── PostgreSQL Flexible Server ──────────────────────────────────
+// ── Virtual Machine ─────────────────────────────────────────────
 
-resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
-  name: pgServerName
-  location: location
-  sku: {
-    name: 'Standard_B1ms'
-    tier: 'Burstable'
-  }
-  properties: {
-    version: '16'
-    administratorLogin: pgAdminUser
-    administratorLoginPassword: postgresPassword
-    storage: { storageSizeGB: 32 }
-    backup: {
-      backupRetentionDays: 7
-      geoRedundantBackup: 'Disabled'
-    }
-    highAvailability: { mode: 'Disabled' }
-  }
-}
-
-resource postgresDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
-  parent: postgres
-  name: pgDbName
-}
-
-// Enable pgvector extension
-resource pgvectorExt 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
-  parent: postgres
-  name: 'azure.extensions'
-  properties: {
-    value: 'VECTOR'
-    source: 'user-override'
-  }
-}
-
-// Allow Azure services (Container Apps) to reach PostgreSQL
-resource pgFirewall 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
-  parent: postgres
-  name: 'AllowAzureServices'
-  properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '0.0.0.0'
-  }
-}
-
-// ── Container Apps Environment ──────────────────────────────────
-
-resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
-  name: 'cae-${prefix}'
+resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
+  name: vmName
   location: location
   properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: logAnalytics.properties.customerId
-        sharedKey: logAnalytics.listKeys().primarySharedKey
-      }
-    }
-  }
-}
-
-// ── Container App (casper-server) ───────────────────────────────
-
-resource app 'Microsoft.App/containerApps@2024-03-01' = {
-  name: 'ca-${prefix}'
-  location: location
-  properties: {
-    managedEnvironmentId: cae.id
-    configuration: {
-      activeRevisionsMode: 'Single'
-      ingress: {
-        external: true
-        targetPort: 3000
-        transport: 'auto'
-        allowInsecure: false
-      }
-      registries: [
-        {
-          server: acr.properties.loginServer
-          username: acr.listCredentials().username
-          passwordSecretRef: 'acr-password'
-        }
-      ]
-      secrets: [
-        { name: 'acr-password', value: acr.listCredentials().passwords[0].value }
-        { name: 'database-url', value: pgConnStr }
-        { name: 'master-key', value: isDevAuth ? 'unused' : masterKey }
-      ]
-    }
-    template: {
-      containers: [
-        {
-          name: 'casper-server'
-          image: containerImage
-          resources: {
-            cpu: json('0.5')
-            memory: '1Gi'
-          }
-          env: [
-            { name: 'DATABASE_URL', secretRef: 'database-url' }
-            { name: 'DATABASE_OWNER_URL', secretRef: 'database-url' }
-            { name: 'CASPER_PUBLIC_URL', value: 'https://ca-${prefix}.${cae.properties.defaultDomain}' }
-            { name: 'CASPER_DEV_AUTH', value: isDevAuth ? 'true' : 'false' }
-            { name: 'CASPER_MASTER_KEY', secretRef: 'master-key' }
-            { name: 'CASPER_ADMIN_EMAIL', value: adminEmail }
-            { name: 'RUST_LOG', value: 'info,sqlx=warn' }
-          ]
-          probes: [
+    hardwareProfile: { vmSize: vmSize }
+    osProfile: {
+      computerName: vmName
+      adminUsername: adminUsername
+      customData: base64(cloudInit)
+      linuxConfiguration: {
+        disablePasswordAuthentication: true
+        ssh: {
+          publicKeys: [
             {
-              type: 'Liveness'
-              httpGet: { path: '/health', port: 3000 }
-              periodSeconds: 30
-              failureThreshold: 3
-            }
-            {
-              type: 'Readiness'
-              httpGet: { path: '/health', port: 3000 }
-              periodSeconds: 10
-              initialDelaySeconds: 5
+              path: '/home/${adminUsername}/.ssh/authorized_keys'
+              keyData: sshPublicKey
             }
           ]
         }
-      ]
-      scale: {
-        minReplicas: 1
-        maxReplicas: env == 'prod' ? 5 : 2
-        rules: [
-          {
-            name: 'http-scaling'
-            http: { metadata: { concurrentRequests: '50' } }
-          }
-        ]
       }
+    }
+    storageProfile: {
+      imageReference: {
+        publisher: 'Canonical'
+        offer: '0001-com-ubuntu-server-noble'
+        sku: '24_04-lts-gen2'
+        version: 'latest'
+      }
+      osDisk: {
+        createOption: 'FromImage'
+        diskSizeGB: 64
+        managedDisk: { storageAccountType: 'StandardSSD_LRS' }
+      }
+    }
+    networkProfile: {
+      networkInterfaces: [{ id: nic.id }]
     }
   }
 }
 
 // ── Outputs ─────────────────────────────────────────────────────
 
-output acrLoginServer string = acr.properties.loginServer
 output acrName string = acr.name
-output appFqdn string = app.properties.configuration.ingress.fqdn
-output appUrl string = 'https://${app.properties.configuration.ingress.fqdn}'
-output postgresHost string = '${postgres.name}.postgres.database.azure.com'
+output acrLoginServer string = acr.properties.loginServer
+output vmPublicIp string = publicIp.properties.ipAddress
+output vmFqdn string = publicIp.properties.dnsSettings.fqdn
+output sshCommand string = 'ssh ${adminUsername}@${publicIp.properties.dnsSettings.fqdn}'
