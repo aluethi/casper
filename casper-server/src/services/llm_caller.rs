@@ -39,8 +39,7 @@ impl LlmCaller for RealLlmCaller {
         patched.model = deployment.model_name.clone();
         patched.extra = merged_extra;
 
-        let (response, backend) =
-            self.dispatch_with_retry(&deployment, &patched).await?;
+        let (response, backend) = self.dispatch_with_retry(&deployment, &patched).await?;
 
         Ok((response, Some(backend.id)))
     }
@@ -141,8 +140,7 @@ impl RealLlmCaller {
             }
         }
 
-        Err(last_error
-            .unwrap_or_else(|| CasperError::Unavailable("all backends exhausted".into())))
+        Err(last_error.unwrap_or_else(|| CasperError::Unavailable("all backends exhausted".into())))
     }
 
     async fn dispatch_stream_with_retry<'a>(
@@ -190,13 +188,8 @@ impl RealLlmCaller {
                     count
                 });
 
-                match casper_catalog::dispatch_stream(
-                    &self.http_client,
-                    backend,
-                    request,
-                    inner_tx,
-                )
-                .await
+                match casper_catalog::dispatch_stream(&self.http_client, backend, request, inner_tx)
+                    .await
                 {
                     Ok(response) => {
                         let _ = fwd_handle.await;
@@ -217,7 +210,6 @@ impl RealLlmCaller {
             }
         }
 
-        Err(last_error
-            .unwrap_or_else(|| CasperError::Unavailable("all backends exhausted".into())))
+        Err(last_error.unwrap_or_else(|| CasperError::Unavailable("all backends exhausted".into())))
     }
 }

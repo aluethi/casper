@@ -1,5 +1,4 @@
 pub mod agent_service;
-pub mod llm_caller;
 pub mod apikey_service;
 pub mod backend_service;
 pub mod connection_service;
@@ -8,6 +7,7 @@ pub mod deployment_service;
 pub mod feedback_service;
 pub mod inference_service;
 pub mod knowledge_service;
+pub mod llm_caller;
 pub mod memory_service;
 pub mod model_service;
 pub mod oauth_provider_service;

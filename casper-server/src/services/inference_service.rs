@@ -203,8 +203,7 @@ pub async fn chat_completions(
                 let deployment =
                     resolve_deployment(&state.db_owner, tenant_id, &current_slug).await?;
                 if let Some(fallback_id) = deployment.fallback_deployment_id {
-                    let fallback =
-                        resolve_deployment_by_id(&state.db_owner, fallback_id).await?;
+                    let fallback = resolve_deployment_by_id(&state.db_owner, fallback_id).await?;
                     tracing::info!(
                         from = %current_slug,
                         to = %fallback.slug,
@@ -271,4 +270,3 @@ pub async fn list_models(
         data,
     })
 }
-

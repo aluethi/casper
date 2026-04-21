@@ -35,9 +35,9 @@ pub struct RunStreamRequest {
     pub ask_rx: mpsc::Receiver<String>,
 }
 
+pub use casper_catalog::LlmCaller;
 #[cfg(test)]
 pub use llm::MockLlmCaller;
-pub use casper_catalog::LlmCaller;
 
 /// Maximum number of ReAct loop iterations before we bail out.
 const DEFAULT_MAX_TURNS: usize = 25;
