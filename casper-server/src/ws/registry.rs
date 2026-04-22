@@ -104,6 +104,12 @@ impl AgentBackendRegistry {
         conn.pending_requests.insert(request_id.clone(), tx);
 
         // Build the WS inference request
+        let extra =
+            if request.extra.is_null() || request.extra.as_object().is_some_and(|o| o.is_empty()) {
+                None
+            } else {
+                Some(request.extra.clone())
+            };
         let ws_req = WsMessage::InferenceRequest(casper_wire::InferenceRequest {
             id: request_id.clone(),
             model: request.model.clone(),
@@ -117,6 +123,7 @@ impl AgentBackendRegistry {
                 "temperature": request.temperature,
                 "stream": false,
             }),
+            extra,
             timeout_ms,
         });
 

@@ -88,6 +88,8 @@ pub struct InferenceRequest {
     pub model: String,
     pub messages: Vec<serde_json::Value>,
     pub params: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
     pub timeout_ms: u64,
 }
 

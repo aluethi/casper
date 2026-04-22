@@ -122,6 +122,7 @@ pub async fn run_connection(
                         &req.model,
                         &req.messages,
                         &req.params,
+                        req.extra.as_ref(),
                         req.timeout_ms,
                     )
                     .await;
@@ -201,6 +202,7 @@ async fn dispatch_local(
     model: &str,
     messages: &[serde_json::Value],
     params: &serde_json::Value,
+    extra: Option<&serde_json::Value>,
     timeout_ms: u64,
 ) -> Result<
     (InferenceMessage, InferenceUsage, Option<String>),
@@ -208,7 +210,14 @@ async fn dispatch_local(
 > {
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
 
-    let mut body = serde_json::json!({ "model": model, "messages": messages, "stream": false });
+    // If there's a system prompt in extra, prepend it as a system message
+    let mut all_messages = Vec::new();
+    if let Some(system) = extra.and_then(|e| e.get("system")).and_then(|s| s.as_str()) {
+        all_messages.push(serde_json::json!({ "role": "system", "content": system }));
+    }
+    all_messages.extend_from_slice(messages);
+
+    let mut body = serde_json::json!({ "model": model, "messages": all_messages, "stream": false });
     if let Some(v) = params.get("max_tokens").and_then(|v| v.as_i64()) {
         body["max_tokens"] = serde_json::json!(v);
     }
