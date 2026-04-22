@@ -1,37 +1,34 @@
 use casper_base::UsageEvent;
 use casper_base::scope::has_scope;
 use casper_base::{CasperError, Scope};
-use casper_catalog::{LlmRequest, Message, resolve_deployment, resolve_deployment_by_id};
+use casper_llm::{
+    CompletionRequest, ContentBlock, LlmMessage, LlmProvider, LlmRole, ToolDefinition,
+};
+
+use super::routing::{resolve_deployment, resolve_deployment_by_id};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::AppState;
 
-/// Maximum deployment fallback chain depth to prevent cycles.
 const MAX_FALLBACK_DEPTH: usize = 3;
 
 // ── Request types ─────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct ChatCompletionRequest {
-    /// Deployment slug (e.g. "sonnet-fast").
     pub model: String,
-    /// Chat messages.
     pub messages: Vec<serde_json::Value>,
-    /// Maximum tokens to generate.
     #[serde(default)]
     pub max_tokens: Option<i32>,
-    /// Sampling temperature.
     #[serde(default)]
     pub temperature: Option<f64>,
-    /// Whether to stream (not yet implemented).
     #[serde(default)]
     pub stream: bool,
-    /// Tool definitions.
     #[serde(default)]
     pub tools: Option<Vec<serde_json::Value>>,
-    /// Any other fields are captured here.
     #[serde(flatten)]
     pub extra: serde_json::Value,
 }
@@ -103,47 +100,76 @@ pub async fn chat_completions(
         ));
     }
 
-    let messages: Vec<Message> = req
+    let messages: Vec<LlmMessage> = req
         .messages
         .iter()
         .map(|m| {
             let role_str = m["role"].as_str().unwrap_or("user");
-            let role: casper_catalog::MessageRole =
-                serde_json::from_value(serde_json::Value::String(role_str.to_string()))
-                    .unwrap_or(casper_catalog::MessageRole::User);
-            let content = m.get("content").cloned().unwrap_or(serde_json::Value::Null);
-            Message { role, content }
+            let role = match role_str {
+                "system" => LlmRole::System,
+                "assistant" => LlmRole::Assistant,
+                "tool" => LlmRole::Tool,
+                _ => LlmRole::User,
+            };
+            let content = parse_openai_message_content(role_str, m);
+            LlmMessage { role, content }
         })
         .collect();
 
-    // Walk the deployment fallback chain.
-    // Each call to llm_caller.call() handles backend-level retry/fallback internally.
+    let tools: Vec<ToolDefinition> = req
+        .tools
+        .as_ref()
+        .map(|ts| {
+            ts.iter()
+                .filter_map(|t| {
+                    let func = t.get("function")?;
+                    Some(ToolDefinition {
+                        name: func["name"].as_str()?.to_string(),
+                        description: func
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        input_schema: func
+                            .get("parameters")
+                            .cloned()
+                            .unwrap_or(json!({"type": "object"})),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut current_slug = slug.clone();
     let mut last_error: Option<CasperError> = None;
 
     for depth in 0..=MAX_FALLBACK_DEPTH {
-        let llm_request = LlmRequest {
+        let completion_request = CompletionRequest {
             messages: messages.clone(),
-            model: current_slug.clone(),
-            max_tokens: req.max_tokens,
-            temperature: req.temperature,
-            stream: false,
-            tools: req.tools.clone(),
-            extra: req.extra.clone(),
+            model: Some(current_slug.clone()),
+            max_tokens: req.max_tokens.unwrap_or(4096) as u32,
+            temperature: req.temperature.unwrap_or(0.7) as f32,
+            tools: tools.clone(),
+            stop_sequences: vec![],
         };
 
-        match state.llm_caller.call(tenant_id, &llm_request).await {
-            Ok((llm_response, backend_id)) => {
+        let provider = state.llm.for_tenant(tenant_id);
+        match provider.complete(completion_request).await {
+            Ok(response) => {
+                let backend_id = None; // TODO: propagate from RoutedProvider if needed
+                let input_tokens = response.usage.input_tokens as i32;
+                let output_tokens = response.usage.output_tokens as i32;
+
                 let usage_event = UsageEvent {
                     tenant_id,
                     source: "inference".to_string(),
                     model: current_slug.clone(),
                     deployment_slug: Some(current_slug.clone()),
                     agent_name: None,
-                    input_tokens: llm_response.input_tokens,
-                    output_tokens: llm_response.output_tokens,
-                    cache_read_tokens: llm_response.cache_read_tokens,
-                    cache_write_tokens: llm_response.cache_write_tokens,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
                     backend_id,
                     correlation_id,
                 };
@@ -154,6 +180,55 @@ pub async fn chat_completions(
                     }
                 });
 
+                let text_content: String = response
+                    .content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+
+                let tool_calls: Option<Vec<serde_json::Value>> = {
+                    let tcs: Vec<serde_json::Value> = response
+                        .content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolUse { id, name, input } => Some(json!({
+                                "id": id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string()),
+                                }
+                            })),
+                            _ => None,
+                        })
+                        .collect();
+                    if tcs.is_empty() { None } else { Some(tcs) }
+                };
+
+                let thinking: Option<String> = {
+                    let t: String = response
+                        .reasoning
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Thinking { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if t.is_empty() { None } else { Some(t) }
+                };
+
+                let finish_reason = match response.stop_reason {
+                    casper_llm::StopReason::EndTurn => Some("stop".to_string()),
+                    casper_llm::StopReason::ToolUse => Some("tool_calls".to_string()),
+                    casper_llm::StopReason::MaxTokens => Some("length".to_string()),
+                    casper_llm::StopReason::StopSequence => Some("stop".to_string()),
+                };
+
                 let response_id = format!("chatcmpl-{}", Uuid::now_v7().simple());
                 return Ok(ChatCompletionResponse {
                     id: response_id,
@@ -162,21 +237,21 @@ pub async fn chat_completions(
                     choices: vec![Choice {
                         index: 0,
                         message: ChoiceMessage {
-                            role: llm_response.role.to_string(),
-                            content: if llm_response.content.is_empty() {
+                            role: "assistant".to_string(),
+                            content: if text_content.is_empty() {
                                 None
                             } else {
-                                Some(llm_response.content.clone())
+                                Some(text_content)
                             },
-                            tool_calls: llm_response.tool_calls.clone(),
-                            thinking: llm_response.thinking.clone(),
+                            tool_calls,
+                            thinking,
                         },
-                        finish_reason: llm_response.finish_reason.clone(),
+                        finish_reason,
                     }],
                     usage: Usage {
-                        prompt_tokens: llm_response.input_tokens,
-                        completion_tokens: llm_response.output_tokens,
-                        total_tokens: llm_response.input_tokens + llm_response.output_tokens,
+                        prompt_tokens: input_tokens,
+                        completion_tokens: output_tokens,
+                        total_tokens: input_tokens + output_tokens,
                     },
                 });
             }
@@ -199,7 +274,6 @@ pub async fn chat_completions(
                 );
                 last_error = Some(e);
 
-                // Try fallback deployment if configured
                 let deployment =
                     resolve_deployment(&state.db_owner, tenant_id, &current_slug).await?;
                 if let Some(fallback_id) = deployment.fallback_deployment_id {
@@ -218,6 +292,46 @@ pub async fn chat_completions(
     }
 
     Err(last_error.unwrap_or_else(|| CasperError::Unavailable("all deployments exhausted".into())))
+}
+
+fn parse_openai_message_content(role: &str, m: &serde_json::Value) -> Vec<ContentBlock> {
+    if role == "tool" {
+        let tool_call_id = m["tool_call_id"].as_str().unwrap_or("").to_string();
+        let content = m["content"].as_str().unwrap_or("").to_string();
+        return vec![ContentBlock::ToolResult {
+            tool_use_id: tool_call_id,
+            content,
+            is_error: false,
+        }];
+    }
+
+    if role == "assistant" {
+        let mut blocks = Vec::new();
+        if let Some(text) = m["content"].as_str()
+            && !text.is_empty()
+        {
+            blocks.push(ContentBlock::Text {
+                text: text.to_string(),
+            });
+        }
+        if let Some(tool_calls) = m["tool_calls"].as_array() {
+            for tc in tool_calls {
+                let id = tc["id"].as_str().unwrap_or("").to_string();
+                let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                let input: serde_json::Value = tc["function"]["arguments"]
+                    .as_str()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or(json!({}));
+                blocks.push(ContentBlock::ToolUse { id, name, input });
+            }
+        }
+        if !blocks.is_empty() {
+            return blocks;
+        }
+    }
+
+    let text = m["content"].as_str().unwrap_or("").to_string();
+    vec![ContentBlock::Text { text }]
 }
 
 pub async fn list_models(

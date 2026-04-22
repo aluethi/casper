@@ -97,7 +97,7 @@ curl http://localhost:3000/api/v1/agents \
 casper/
 |-- crates/
 |   |-- casper-base/          Foundation: types, JWT, auth, DB pools, vault, observability
-|   |-- casper-catalog/       Model catalog, quotas, routing + LLM provider dispatch
+|   |-- casper-llm/       Model catalog, quotas, routing + LLM provider dispatch
 |   |-- casper-agent/         Actors, ReAct loop, prompt assembler, tools, MCP client
 |   +-- casper-wire/          Shared WebSocket protocol types
 |

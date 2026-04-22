@@ -4,12 +4,12 @@ use std::time::{Duration, Instant};
 
 use casper_base::CasperError;
 use casper_base::RuntimeMetrics;
-use casper_catalog::{LlmRequest, LlmResponse, MessageRole};
 use dashmap::DashMap;
+use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use casper_wire::{InferenceMessage, WsMessage};
+use casper_wire::WsMessage;
 
 // ── Agent Backend Connection ──────────────────────────────────────
 
@@ -20,7 +20,6 @@ pub struct AgentBackendConnection {
     pub connected_at: Instant,
     pub active_requests: AtomicU32,
     pub max_concurrent: u32,
-    /// Maps request ID to a oneshot sender for the response.
     pub pending_requests: DashMap<String, oneshot::Sender<WsMessage>>,
 }
 
@@ -41,7 +40,6 @@ impl AgentBackendRegistry {
         }
     }
 
-    /// Register a new connection for a backend.
     pub fn register(&self, backend_id: Uuid, conn: Arc<AgentBackendConnection>) {
         self.connections.entry(backend_id).or_default().push(conn);
         self.round_robin
@@ -58,7 +56,6 @@ impl AgentBackendRegistry {
             .set(count as i64);
     }
 
-    /// Remove a connection by connection ID.
     pub fn unregister(&self, backend_id: Uuid, connection_id: Uuid) {
         if let Some(mut conns) = self.connections.get_mut(&backend_id) {
             conns.retain(|c| c.id != connection_id);
@@ -70,7 +67,6 @@ impl AgentBackendRegistry {
         }
     }
 
-    /// Check if at least one connection with capacity is available.
     pub fn is_available(&self, backend_id: &Uuid) -> bool {
         self.connections
             .get(backend_id)
@@ -82,13 +78,13 @@ impl AgentBackendRegistry {
             .unwrap_or(false)
     }
 
-    /// Dispatch a request to an agent backend (round-robin).
-    pub async fn dispatch(
+    /// Transport-level dispatch: sends a JSON request to an agent backend
+    /// over WebSocket and returns the JSON response.
+    pub async fn dispatch_json(
         &self,
         backend_id: Uuid,
-        request: &LlmRequest,
-        timeout_ms: u64,
-    ) -> Result<LlmResponse, CasperError> {
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value, CasperError> {
         let start = Instant::now();
         let bid_str = backend_id.to_string();
 
@@ -103,34 +99,24 @@ impl AgentBackendRegistry {
         let (tx, rx) = oneshot::channel::<WsMessage>();
         conn.pending_requests.insert(request_id.clone(), tx);
 
-        // Build the WS inference request
-        let extra =
-            if request.extra.is_null() || request.extra.as_object().is_some_and(|o| o.is_empty()) {
-                None
-            } else {
-                Some(request.extra.clone())
-            };
+        let timeout_ms = request["timeout_ms"].as_u64().unwrap_or(120_000);
+
         let ws_req = WsMessage::InferenceRequest(casper_wire::InferenceRequest {
             id: request_id.clone(),
-            model: request.model.clone(),
-            messages: request
-                .messages
-                .iter()
-                .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
-                .collect(),
-            params: serde_json::json!({
-                "max_tokens": request.max_tokens,
-                "temperature": request.temperature,
+            model: request["model"].as_str().unwrap_or("").to_string(),
+            messages: request["messages"].as_array().cloned().unwrap_or_default(),
+            params: json!({
+                "max_tokens": request["max_tokens"],
+                "temperature": request["temperature"],
                 "stream": false,
             }),
-            extra,
+            extra: None,
             timeout_ms,
         });
 
         let msg_text = serde_json::to_string(&ws_req)
             .map_err(|e| CasperError::Internal(format!("failed to serialize ws request: {e}")))?;
 
-        // Send the request over WebSocket
         if conn.sender.send(msg_text).await.is_err() {
             conn.pending_requests.remove(&request_id);
             conn.active_requests.fetch_sub(1, Ordering::Relaxed);
@@ -147,7 +133,6 @@ impl AgentBackendRegistry {
             ));
         }
 
-        // Wait for response with timeout
         let timeout = Duration::from_millis(timeout_ms);
         let result = tokio::time::timeout(timeout, rx).await;
 
@@ -162,28 +147,26 @@ impl AgentBackendRegistry {
 
         match result {
             Ok(Ok(WsMessage::InferenceResponse(resp))) => {
-                let msg = resp.message.unwrap_or(InferenceMessage {
+                let msg = resp.message.unwrap_or(casper_wire::InferenceMessage {
                     role: "assistant".to_string(),
                     content: None,
                     tool_calls: None,
                 });
                 let usage = resp.usage.unwrap_or_default();
 
-                let role: MessageRole = serde_json::from_value(serde_json::Value::String(msg.role))
-                    .unwrap_or(MessageRole::Assistant);
-
-                Ok(LlmResponse {
-                    content: msg.content.unwrap_or_default(),
-                    role,
-                    model: request.model.clone(),
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
-                    cache_read_tokens: usage.cache_read_tokens,
-                    cache_write_tokens: usage.cache_write_tokens,
-                    tool_calls: msg.tool_calls,
-                    finish_reason: resp.stop_reason.or(Some("stop".to_string())),
-                    thinking: None,
-                })
+                Ok(json!({
+                    "message": {
+                        "role": msg.role,
+                        "content": msg.content,
+                        "tool_calls": msg.tool_calls,
+                    },
+                    "usage": {
+                        "input_tokens": usage.input_tokens,
+                        "output_tokens": usage.output_tokens,
+                    },
+                    "stop_reason": resp.stop_reason,
+                    "model": resp.id,
+                }))
             }
             Ok(Ok(WsMessage::InferenceError(err))) => {
                 let error = err.error;
@@ -260,12 +243,10 @@ impl AgentBackendRegistry {
             }
         }
 
-        // All at capacity — pick first anyway (will queue)
         let idx = counter.value().fetch_add(1, Ordering::Relaxed) % len;
         Ok(Arc::clone(&conns[idx as usize]))
     }
 
-    /// Get status summary for health endpoint.
     pub fn health_status(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();
         for entry in self.connections.iter() {
@@ -277,7 +258,7 @@ impl AgentBackendRegistry {
                 .sum();
             map.insert(
                 backend_id.to_string(),
-                serde_json::json!({
+                json!({
                     "connections": conns.len(),
                     "active_requests": active,
                 }),

@@ -318,10 +318,11 @@ dependencies = [
  "async-trait",
  "base64",
  "casper-base",
- "casper-catalog",
+ "casper-llm",
  "chrono",
  "chrono-tz",
  "dashmap",
+ "futures",
  "rand 0.9.4",
  "reqwest",
  "serde",
@@ -385,23 +386,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "casper-catalog"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "casper-base",
- "futures",
- "reqwest",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "casper-cli"
 version = "0.1.0"
 dependencies = [
@@ -416,6 +400,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "casper-llm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "casper-base",
+ "casper-wire",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "casper-server"
 version = "0.1.0"
 dependencies = [
@@ -426,7 +426,7 @@ dependencies = [
  "bigdecimal",
  "casper-agent",
  "casper-base",
- "casper-catalog",
+ "casper-llm",
  "casper-wire",
  "dashmap",
  "futures",

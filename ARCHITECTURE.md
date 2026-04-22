@@ -11,7 +11,7 @@ Casper is organized as a Rust workspace with 12 crates. Dependencies flow downwa
               /     |     \
      casper-db  casper-auth  casper-vault   <-- DB access, crypto
           |         |            |
-     casper-observe  casper-catalog         <-- business logic
+     casper-observe  casper-llm         <-- business logic
           |              |
      casper-proxy   casper-knowledge        <-- external calls
           |              |
@@ -33,7 +33,7 @@ Casper is organized as a Rust workspace with 12 crates. Dependencies flow downwa
 
 **casper-observe** -- Observability. `AuditWriter` batches audit log entries and flushes them to PostgreSQL on a timer. `UsageRecorder` tracks per-request token usage for billing and quota enforcement. `RuntimeMetrics` provides Prometheus-format metrics.
 
-**casper-catalog** -- Model and deployment management. Resolves which backend to call for a given deployment slug, applies retry/fallback chains, checks tenant quotas, and merges deployment-level parameter overrides with request parameters.
+**casper-llm** -- Model and deployment management. Resolves which backend to call for a given deployment slug, applies retry/fallback chains, checks tenant quotas, and merges deployment-level parameter overrides with request parameters.
 
 **casper-proxy** -- LLM provider dispatch. Contains `anthropic` and `openai` adapter modules that translate the internal `LlmRequest`/`LlmResponse` types to provider-specific wire formats. The `dispatch` function selects the adapter based on backend provider type.
 
@@ -68,7 +68,7 @@ casper-server (Axum)
   |
   +--> inference_routes::chat_completions
   |      |
-  |      +--> casper-catalog::resolve_deployment
+  |      +--> casper-llm::resolve_deployment
   |      |      - Look up deployment by slug
   |      |      - Resolve backend chain (primary + fallbacks)
   |      |      - Check tenant quota (token budget)

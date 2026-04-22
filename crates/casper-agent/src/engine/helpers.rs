@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use casper_base::CasperError;
 use casper_base::UsageEvent;
-use casper_catalog::LlmResponse;
+use casper_llm::CompletionResponse;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -120,7 +120,7 @@ impl AgentEngine {
         tenant_id: Uuid,
         agent_name: &str,
         deployment_slug: &str,
-        response: &LlmResponse,
+        response: &CompletionResponse,
         backend_id: Option<Uuid>,
         correlation_id: Uuid,
     ) {
@@ -131,10 +131,10 @@ impl AgentEngine {
                 model: response.model.clone(),
                 deployment_slug: Some(deployment_slug.to_string()),
                 agent_name: Some(agent_name.to_string()),
-                input_tokens: response.input_tokens,
-                output_tokens: response.output_tokens,
-                cache_read_tokens: response.cache_read_tokens,
-                cache_write_tokens: response.cache_write_tokens,
+                input_tokens: response.usage.input_tokens as i32,
+                output_tokens: response.usage.output_tokens as i32,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
                 backend_id,
                 correlation_id,
             };
@@ -215,7 +215,7 @@ impl AgentEngine {
             db: self.db.clone(),
             http_client: self.http_client.clone(),
             tool_dispatcher: ToolDispatcher::new(),
-            llm_caller: self.llm_caller.clone(),
+            llm_provider: self.llm_provider.clone(),
             audit_writer: self.audit_writer.clone(),
             usage_recorder: self.usage_recorder.clone(),
             delegation_depth: self.delegation_depth + 1,

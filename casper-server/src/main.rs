@@ -40,7 +40,7 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub async_tasks: Arc<DashMap<Uuid, Option<serde_json::Value>>>,
     pub agent_registry: Arc<ws::AgentBackendRegistry>,
-    pub llm_caller: Arc<dyn casper_catalog::LlmCaller>,
+    pub llm: Arc<services::llm_caller::RoutedProvider>,
     /// Pending ask_user responses: conversation_id → sender for user's answer.
     pub pending_asks: Arc<DashMap<Uuid, tokio::sync::mpsc::Sender<String>>>,
 }
@@ -324,12 +324,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let agent_registry = Arc::new(ws::AgentBackendRegistry::new(metrics.clone()));
 
-    let llm_caller: Arc<dyn casper_catalog::LlmCaller> =
-        Arc::new(services::llm_caller::RealLlmCaller {
-            db: owner_pool.clone(),
-            http_client: http_client.clone(),
-            agent_registry: Arc::clone(&agent_registry),
-        });
+    let llm = Arc::new(services::llm_caller::RoutedProvider {
+        db: owner_pool.clone(),
+        http_client: http_client.clone(),
+        agent_registry: Arc::clone(&agent_registry),
+    });
 
     let state = AppState {
         config: Arc::new(config.clone()),
@@ -346,7 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client,
         async_tasks: Arc::new(DashMap::new()),
         agent_registry,
-        llm_caller,
+        llm,
         pending_asks: Arc::new(DashMap::new()),
     };
 

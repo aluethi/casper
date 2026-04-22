@@ -34,7 +34,7 @@ casper/
 │   ├── casper-auth/
 │   ├── casper-vault/
 │   ├── casper-observe/
-│   ├── casper-catalog/
+│   ├── casper-llm/
 │   ├── casper-proxy/
 │   ├── casper-knowledge/
 │   ├── casper-mcp/
@@ -345,7 +345,7 @@ In `casper-server`:
 
 ### Task 3F — Routing engine
 
-In `casper-catalog`:
+In `casper-llm`:
 - `resolve_deployment(tenant_id, slug)`.
 - `select_backends(deployment)`.
 - `dispatch_with_retry(deployment, backends, request)`.
@@ -596,7 +596,7 @@ In `casper-agent`:
 ### Task 5N — ReAct loop: LLM wiring and observability
 
 In `casper-agent`:
-- Replace mock LLM with real dispatch via `casper-catalog` routing → `casper-proxy`.
+- Replace mock LLM with real dispatch via `casper-llm` routing → `casper-proxy`.
 - After each LLM call: record audit event + usage event (with cache tokens).
 - Wire into actor mailbox processing.
 

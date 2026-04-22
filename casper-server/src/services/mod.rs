@@ -12,6 +12,7 @@ pub mod memory_service;
 pub mod model_service;
 pub mod oauth_provider_service;
 pub mod quota_service;
+pub mod routing;
 pub mod run_service;
 pub mod secret_service;
 pub mod snippet_service;

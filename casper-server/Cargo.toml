@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 casper-base = { workspace = true }
-casper-catalog = { workspace = true }
+casper-llm = { workspace = true }
 casper-agent = { workspace = true }
 casper-wire = { workspace = true }
 axum = { workspace = true }

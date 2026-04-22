@@ -154,19 +154,14 @@ impl ToolDispatcher {
         tool.execute(input, ctx).await
     }
 
-    /// Return tool definitions in OpenAI function-calling format.
-    pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
+    /// Return tool definitions in the strongly-typed `ToolDefinition` format.
+    pub fn tool_definitions(&self) -> Vec<casper_llm::ToolDefinition> {
         self.tools
             .values()
-            .map(|tool| {
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name(),
-                        "description": tool.description(),
-                        "parameters": tool.parameters_schema(),
-                    }
-                })
+            .map(|tool| casper_llm::ToolDefinition {
+                name: tool.name().to_string(),
+                description: tool.description().to_string(),
+                input_schema: tool.parameters_schema(),
             })
             .collect()
     }
@@ -436,14 +431,14 @@ mod tests {
     }
 
     #[test]
-    fn dispatcher_tool_definitions_openai_format() {
+    fn dispatcher_tool_definitions_format() {
         let mut d = ToolDispatcher::new();
         d.register(Arc::new(EchoTool));
         let defs = d.tool_definitions();
         assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0]["type"], "function");
-        assert_eq!(defs[0]["function"]["name"], "echo");
-        assert!(defs[0]["function"]["parameters"].is_object());
+        assert_eq!(defs[0].name, "echo");
+        assert_eq!(defs[0].description, "Echoes the input back.");
+        assert!(defs[0].input_schema.is_object());
     }
 
     #[test]

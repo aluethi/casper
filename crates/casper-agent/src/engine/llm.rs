@@ -1,46 +1,45 @@
-//! Mock LLM caller for testing.
-//!
-//! The `LlmCaller` trait is defined in `casper-catalog`. The real
-//! implementation lives in `casper-server` where concrete infrastructure
-//! (HTTP clients, WebSocket registries) is available.
+//! Mock LLM provider for testing.
+
+#[cfg(test)]
+use std::pin::Pin;
+#[cfg(test)]
+use std::time::Duration;
 
 #[cfg(test)]
 use casper_base::CasperError;
 #[cfg(test)]
-use casper_catalog::{LlmCaller, LlmResponse, MessageRole};
+use casper_llm::{
+    CompletionRequest, CompletionResponse, ContentBlock, LlmProvider, StopReason, TokenUsage,
+};
 #[cfg(test)]
-use uuid::Uuid;
+use futures::Stream;
 
 #[cfg(test)]
-use casper_catalog::LlmRequest;
-#[cfg(test)]
-use serde_json::json;
-
-#[cfg(test)]
-pub struct MockLlmCaller {
-    responses: std::sync::Mutex<Vec<LlmResponse>>,
+pub struct MockLlmProvider {
+    responses: std::sync::Mutex<Vec<CompletionResponse>>,
 }
 
 #[cfg(test)]
-impl MockLlmCaller {
-    pub fn new(responses: Vec<LlmResponse>) -> Self {
+impl MockLlmProvider {
+    pub fn new(responses: Vec<CompletionResponse>) -> Self {
         Self {
             responses: std::sync::Mutex::new(responses),
         }
     }
 
     pub fn simple(text: &str) -> Self {
-        Self::new(vec![LlmResponse {
-            content: text.to_string(),
-            role: MessageRole::Assistant,
+        Self::new(vec![CompletionResponse {
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
+            reasoning: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: TokenUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+            },
             model: "mock-model".to_string(),
-            input_tokens: 100,
-            output_tokens: 50,
-            cache_read_tokens: Some(0),
-            cache_write_tokens: Some(0),
-            tool_calls: None,
-            finish_reason: Some("end_turn".to_string()),
-            thinking: None,
+            latency: Duration::from_millis(10),
         }])
     }
 
@@ -50,53 +49,70 @@ impl MockLlmCaller {
         final_text: &str,
     ) -> Self {
         Self::new(vec![
-            LlmResponse {
-                content: String::new(),
-                role: MessageRole::Assistant,
+            CompletionResponse {
+                content: vec![ContentBlock::ToolUse {
+                    id: "call_001".to_string(),
+                    name: tool_name.to_string(),
+                    input: tool_input,
+                }],
+                reasoning: vec![],
+                stop_reason: StopReason::ToolUse,
+                usage: TokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                },
                 model: "mock-model".to_string(),
-                input_tokens: 100,
-                output_tokens: 50,
-                cache_read_tokens: Some(0),
-                cache_write_tokens: Some(0),
-                tool_calls: Some(vec![json!({
-                    "type": "tool_use",
-                    "id": "call_001",
-                    "name": tool_name,
-                    "input": tool_input,
-                })]),
-                finish_reason: Some("tool_use".to_string()),
-                thinking: None,
+                latency: Duration::from_millis(10),
             },
-            LlmResponse {
-                content: final_text.to_string(),
-                role: MessageRole::Assistant,
+            CompletionResponse {
+                content: vec![ContentBlock::Text {
+                    text: final_text.to_string(),
+                }],
+                reasoning: vec![],
+                stop_reason: StopReason::EndTurn,
+                usage: TokenUsage {
+                    input_tokens: 150,
+                    output_tokens: 60,
+                },
                 model: "mock-model".to_string(),
-                input_tokens: 150,
-                output_tokens: 60,
-                cache_read_tokens: Some(0),
-                cache_write_tokens: Some(0),
-                tool_calls: None,
-                finish_reason: Some("end_turn".to_string()),
-                thinking: None,
+                latency: Duration::from_millis(10),
             },
         ])
+    }
+
+    fn next_response(&self) -> Result<CompletionResponse, CasperError> {
+        let mut responses = self.responses.lock().unwrap();
+        if responses.is_empty() {
+            return Err(CasperError::Internal(
+                "MockLlmProvider: no more responses".into(),
+            ));
+        }
+        Ok(responses.remove(0))
     }
 }
 
 #[cfg(test)]
 #[async_trait::async_trait]
-impl LlmCaller for MockLlmCaller {
-    async fn call(
+impl LlmProvider for MockLlmProvider {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
+    async fn complete(
         &self,
-        _tenant_id: Uuid,
-        _request: &LlmRequest,
-    ) -> Result<(LlmResponse, Option<Uuid>), CasperError> {
-        let mut responses = self.responses.lock().unwrap();
-        if responses.is_empty() {
-            return Err(CasperError::Internal(
-                "MockLlmCaller: no more responses".into(),
-            ));
-        }
-        Ok((responses.remove(0), None))
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse, CasperError> {
+        self.next_response()
+    }
+
+    async fn complete_stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<ContentBlock, CasperError>> + Send>>, CasperError>
+    {
+        let response = self.next_response()?;
+        let blocks: Vec<Result<ContentBlock, CasperError>> =
+            response.content.into_iter().map(Ok).collect();
+        Ok(Box::pin(futures::stream::iter(blocks)))
     }
 }

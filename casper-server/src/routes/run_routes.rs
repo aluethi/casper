@@ -11,8 +11,8 @@ use axum::{
     },
     routing::{get, post},
 };
+use casper_agent::StreamEvent;
 use casper_base::CasperError;
-use casper_catalog::StreamEvent;
 use futures::{StreamExt, stream::Stream};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -145,7 +145,7 @@ async fn run_agent_stream(
             state_clone.db_owner.clone(),
             state_clone.http_client.clone(),
             casper_agent::tools::ToolDispatcher::new(),
-            Arc::clone(&state_clone.llm_caller),
+            Arc::new(state_clone.llm.for_tenant(tenant_id.0)),
             Some(state_clone.audit.clone()),
             Some(state_clone.usage.clone()),
         );

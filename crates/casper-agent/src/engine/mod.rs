@@ -3,7 +3,7 @@
 //! The engine:
 //! 1. Loads agent configuration from the database
 //! 2. Assembles the prompt (system blocks + conversation history)
-//! 3. Calls the LLM (via casper-catalog routing + dispatch)
+//! 3. Calls the LLM (via casper-llm routing + dispatch)
 //! 4. If the LLM returns tool_use blocks: dispatches tools, appends results, loops
 //! 5. If the LLM returns end_turn: returns the final response
 //! 6. Enforces a maximum number of turns to prevent infinite loops
@@ -16,8 +16,13 @@ use std::time::Instant;
 
 use casper_base::CasperError;
 use casper_base::{AuditWriter, UsageRecorder};
-use casper_catalog::{LlmRequest, Message, MessageRole, StreamEvent};
-use serde_json::json;
+use casper_llm::{
+    CompletionRequest, CompletionResponse, ContentBlock, LlmMessage, LlmProvider, LlmRole,
+    StopReason, TokenUsage,
+};
+
+use crate::stream_event::StreamEvent;
+use futures::StreamExt;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -35,9 +40,8 @@ pub struct RunStreamRequest {
     pub ask_rx: mpsc::Receiver<String>,
 }
 
-pub use casper_catalog::LlmCaller;
 #[cfg(test)]
-pub use llm::MockLlmCaller;
+pub use llm::MockLlmProvider;
 
 /// Maximum number of ReAct loop iterations before we bail out.
 const DEFAULT_MAX_TURNS: usize = 25;
@@ -72,10 +76,9 @@ pub struct AgentEngine {
     pub db: PgPool,
     pub http_client: reqwest::Client,
     pub tool_dispatcher: ToolDispatcher,
-    pub llm_caller: Arc<dyn LlmCaller>,
+    pub llm_provider: Arc<dyn LlmProvider>,
     pub audit_writer: Option<AuditWriter>,
     pub usage_recorder: Option<UsageRecorder>,
-    /// Current delegation depth (0 = top-level call).
     delegation_depth: u32,
 }
 
@@ -84,7 +87,7 @@ impl AgentEngine {
         db: PgPool,
         http_client: reqwest::Client,
         tool_dispatcher: ToolDispatcher,
-        llm_caller: Arc<dyn LlmCaller>,
+        llm_provider: Arc<dyn LlmProvider>,
         audit_writer: Option<AuditWriter>,
         usage_recorder: Option<UsageRecorder>,
     ) -> Self {
@@ -92,7 +95,7 @@ impl AgentEngine {
             db,
             http_client,
             tool_dispatcher,
-            llm_caller,
+            llm_provider,
             audit_writer,
             usage_recorder,
             delegation_depth: 0,
@@ -162,23 +165,22 @@ impl AgentEngine {
         .await
         .map_err(|e| CasperError::Internal(format!("Failed to load history: {e}")))?;
 
-        // Convert history to messages
-        let mut messages: Vec<Message> = history
+        // Convert history to messages — parse stored JSON back into ContentBlock
+        let mut messages: Vec<LlmMessage> = history
             .into_iter()
             .filter_map(|h| {
-                let role: MessageRole =
-                    serde_json::from_value(serde_json::Value::String(h.role.clone())).ok()?;
-                Some(Message {
-                    role,
-                    content: h.content,
-                })
+                let role = parse_role(&h.role)?;
+                let content = parse_history_content(role.clone(), &h.content);
+                Some(LlmMessage { role, content })
             })
             .collect();
 
         // Append the new user message
-        messages.push(Message {
-            role: MessageRole::User,
-            content: serde_json::Value::String(user_message.to_string()),
+        messages.push(LlmMessage {
+            role: LlmRole::User,
+            content: vec![ContentBlock::Text {
+                text: user_message.to_string(),
+            }],
         });
 
         // Store the user message in the DB
@@ -213,96 +215,75 @@ impl AgentEngine {
                 "ReAct turn"
             );
 
-            // Build the LLM request
-            let request = LlmRequest {
-                messages: messages.clone(),
-                model: config.deployment_slug.clone(),
-                max_tokens: Some(config.max_tokens),
-                temperature: Some(config.temperature),
-                stream: false,
-                tools: if tool_defs.is_empty() {
-                    None
-                } else {
-                    Some(tool_defs.clone())
-                },
-                extra: json!({
-                    "system": system_prompt,
-                }),
+            // Build the LLM request — system prompt is prepended as the first message
+            let mut request_messages = vec![LlmMessage {
+                role: LlmRole::System,
+                content: vec![ContentBlock::Text {
+                    text: system_prompt.clone(),
+                }],
+            }];
+            request_messages.extend(messages.clone());
+
+            let request = CompletionRequest {
+                messages: request_messages,
+                model: Some(config.deployment_slug.clone()),
+                max_tokens: config.max_tokens as u32,
+                temperature: config.temperature as f32,
+                tools: tool_defs.clone(),
+                stop_sequences: vec![],
             };
 
-            // Call LLM
-            let (response, backend_id) = self.llm_caller.call(tenant_id, &request).await?;
+            let response = self.llm_provider.complete(request).await?;
 
-            // Accumulate usage
-            usage.input_tokens += response.input_tokens;
-            usage.output_tokens += response.output_tokens;
-            usage.cache_read_tokens += response.cache_read_tokens.unwrap_or(0);
-            usage.cache_write_tokens += response.cache_write_tokens.unwrap_or(0);
+            usage.input_tokens += response.usage.input_tokens as i32;
+            usage.output_tokens += response.usage.output_tokens as i32;
             usage.llm_calls += 1;
 
-            // Record usage event
             self.record_usage(
                 tenant_id,
                 agent_name,
                 &config.deployment_slug,
                 &response,
-                backend_id,
+                None,
                 correlation_id,
             )
             .await;
 
             // Check for tool calls
-            let has_tools = response
-                .tool_calls
-                .as_ref()
-                .is_some_and(|tc| !tc.is_empty());
+            let has_tools = response.stop_reason == StopReason::ToolUse;
 
             if has_tools {
-                let tool_calls = response.tool_calls.as_ref().unwrap();
-                let step_thinking = response.thinking.clone();
+                let step_thinking = extract_thinking(&response);
 
-                // Build assistant message in OpenAI format:
-                // { role: "assistant", content: text|null, tool_calls: [...] }
-                let assistant_content = if response.content.is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    json!(response.content)
+                // Store the full assistant response (may contain text + tool_use blocks)
+                let assistant_msg = LlmMessage {
+                    role: LlmRole::Assistant,
+                    content: response.content.clone(),
                 };
-                let assistant_msg = Message {
-                    role: MessageRole::Assistant,
-                    content: json!({
-                        "content": assistant_content,
-                        "tool_calls": tool_calls,
-                    }),
-                };
-                messages.push(assistant_msg.clone());
+                messages.push(assistant_msg);
 
-                // Store assistant message
+                // Serialize content blocks for DB storage
+                let assistant_content_json =
+                    serde_json::to_value(&response.content).unwrap_or_default();
                 self.store_message(
                     tenant_id,
                     conversation_id,
                     "assistant",
-                    &assistant_msg.content,
+                    &assistant_content_json,
                     agent_name,
                 )
                 .await?;
 
-                // Execute each tool call (OpenAI format):
-                // { id: "call_123", type: "function", function: { name: "...", arguments: "..." } }
+                // Execute each tool call from the content blocks
                 let mut step_tool_calls: Vec<crate::actor::ToolCallStep> = Vec::new();
 
-                for tc in tool_calls {
-                    let func = &tc["function"];
-                    let tool_name = func
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    let tool_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let tool_input: serde_json::Value = func
-                        .get("arguments")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| serde_json::from_str(s).ok())
-                        .unwrap_or(json!({}));
+                for block in &response.content {
+                    let (tool_id, tool_name, tool_input) = match block {
+                        ContentBlock::ToolUse { id, name, input } => {
+                            (id.clone(), name.clone(), input.clone())
+                        }
+                        _ => continue,
+                    };
 
                     tracing::debug!(
                         tool = %tool_name,
@@ -311,7 +292,7 @@ impl AgentEngine {
                     );
 
                     let mut tool_result = active_dispatcher
-                        .dispatch(tool_name, tool_input.clone(), &tool_ctx)
+                        .dispatch(&tool_name, tool_input.clone(), &tool_ctx)
                         .await;
 
                     // Intercept delegation sentinel — execute the child agent
@@ -347,8 +328,6 @@ impl AgentEngine {
 
                     usage.tool_calls += 1;
 
-                    // Build OpenAI tool result message:
-                    // { role: "tool", tool_call_id: "...", content: "..." }
                     let (result_str, is_error) = match &tool_result {
                         Ok(result) => {
                             if result.is_error {
@@ -379,24 +358,25 @@ impl AgentEngine {
                         is_error,
                     });
 
-                    let tool_msg_content = json!({
-                        "tool_call_id": tool_id,
-                        "content": result_str,
-                    });
-
                     // Add tool result as a message
-                    let tool_msg = Message {
-                        role: MessageRole::Tool,
-                        content: tool_msg_content.clone(),
+                    let tool_msg = LlmMessage {
+                        role: LlmRole::Tool,
+                        content: vec![ContentBlock::ToolResult {
+                            tool_use_id: tool_id.clone(),
+                            content: result_str,
+                            is_error,
+                        }],
                     };
-                    messages.push(tool_msg);
+                    messages.push(tool_msg.clone());
 
                     // Store tool result message
+                    let tool_content_json =
+                        serde_json::to_value(&tool_msg.content).unwrap_or_default();
                     self.store_message(
                         tenant_id,
                         conversation_id,
                         "tool",
-                        &tool_msg_content,
+                        &tool_content_json,
                         agent_name,
                     )
                     .await?;
@@ -412,12 +392,13 @@ impl AgentEngine {
             }
 
             // No tool calls — this is the final response
-            let final_message = response.content.clone();
+            let final_message = extract_text(&response.content);
 
             // Capture final thinking (if any)
-            if response.thinking.is_some() {
+            let thinking_text = extract_thinking(&response);
+            if thinking_text.is_some() {
                 steps.push(crate::actor::AgentStep {
-                    thinking: response.thinking.clone(),
+                    thinking: thinking_text,
                     tool_calls: None,
                 });
             }
@@ -516,21 +497,20 @@ impl AgentEngine {
                 .await
                 .map_err(|e| CasperError::Internal(format!("Failed to load history: {e}")))?;
 
-        let mut messages: Vec<Message> = history
+        let mut messages: Vec<LlmMessage> = history
             .into_iter()
             .filter_map(|h| {
-                let role: MessageRole =
-                    serde_json::from_value(serde_json::Value::String(h.role.clone())).ok()?;
-                Some(Message {
-                    role,
-                    content: h.content,
-                })
+                let role = parse_role(&h.role)?;
+                let content = parse_history_content(role.clone(), &h.content);
+                Some(LlmMessage { role, content })
             })
             .collect();
 
-        messages.push(Message {
-            role: MessageRole::User,
-            content: serde_json::Value::String(user_message.to_string()),
+        messages.push(LlmMessage {
+            role: LlmRole::User,
+            content: vec![ContentBlock::Text {
+                text: user_message.to_string(),
+            }],
         });
 
         self.store_message(
@@ -563,30 +543,81 @@ impl AgentEngine {
                 return Err(CasperError::Internal("client disconnected".into()));
             }
 
-            let request = LlmRequest {
-                messages: messages.clone(),
-                model: config.deployment_slug.clone(),
-                max_tokens: Some(config.max_tokens),
-                temperature: Some(config.temperature),
-                stream: true,
-                tools: if tool_defs.is_empty() {
-                    None
-                } else {
-                    Some(tool_defs.clone())
-                },
-                extra: json!({ "system": system_prompt }),
+            // Build the LLM request — system prompt is prepended as the first message
+            let mut request_messages = vec![LlmMessage {
+                role: LlmRole::System,
+                content: vec![ContentBlock::Text {
+                    text: system_prompt.clone(),
+                }],
+            }];
+            request_messages.extend(messages.clone());
+
+            let request = CompletionRequest {
+                messages: request_messages,
+                model: Some(config.deployment_slug.clone()),
+                max_tokens: config.max_tokens as u32,
+                temperature: config.temperature as f32,
+                tools: tool_defs.clone(),
+                stop_sequences: vec![],
             };
 
-            // Stream LLM call — thinking and content deltas flow through tx
-            let (response, backend_id) = self
-                .llm_caller
-                .call_stream(tenant_id, &request, tx.clone())
-                .await?;
+            // Stream LLM response — forward events to SSE while accumulating
+            let mut stream = self.llm_provider.complete_stream(request).await?;
+            let mut content_blocks = Vec::new();
+            let mut reasoning_blocks = Vec::new();
 
-            usage.input_tokens += response.input_tokens;
-            usage.output_tokens += response.output_tokens;
-            usage.cache_read_tokens += response.cache_read_tokens.unwrap_or(0);
-            usage.cache_write_tokens += response.cache_write_tokens.unwrap_or(0);
+            while let Some(item) = stream.next().await {
+                let block = item?;
+                match &block {
+                    ContentBlock::Text { text } => {
+                        let _ = tx
+                            .send(StreamEvent::ContentDelta {
+                                delta: text.clone(),
+                            })
+                            .await;
+                        content_blocks.push(block);
+                    }
+                    ContentBlock::Thinking { text } => {
+                        let _ = tx
+                            .send(StreamEvent::Thinking {
+                                delta: text.clone(),
+                            })
+                            .await;
+                        reasoning_blocks.push(block);
+                    }
+                    ContentBlock::ToolUse { id, name, input } => {
+                        let _ = tx
+                            .send(StreamEvent::ToolCallStart {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input: input.clone(),
+                            })
+                            .await;
+                        content_blocks.push(block);
+                    }
+                    _ => {
+                        content_blocks.push(block);
+                    }
+                }
+            }
+
+            let has_tool_use = content_blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+
+            let response = CompletionResponse {
+                content: content_blocks,
+                reasoning: reasoning_blocks,
+                stop_reason: if has_tool_use {
+                    StopReason::ToolUse
+                } else {
+                    StopReason::EndTurn
+                },
+                usage: TokenUsage::default(),
+                model: String::new(),
+                latency: std::time::Duration::ZERO,
+            };
+
             usage.llm_calls += 1;
 
             self.record_usage(
@@ -594,56 +625,46 @@ impl AgentEngine {
                 agent_name,
                 &config.deployment_slug,
                 &response,
-                backend_id,
+                None,
                 correlation_id,
             )
             .await;
 
-            let has_tools = response
-                .tool_calls
-                .as_ref()
-                .is_some_and(|tc| !tc.is_empty());
+            let has_tools = response.stop_reason == StopReason::ToolUse;
 
             if has_tools {
-                let tool_calls = response.tool_calls.as_ref().unwrap();
-                let step_thinking = response.thinking.clone();
+                let step_thinking = extract_thinking(&response);
 
-                let assistant_content = if response.content.is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    json!(response.content)
+                // Store the full assistant response (may contain text + tool_use blocks)
+                let assistant_msg = LlmMessage {
+                    role: LlmRole::Assistant,
+                    content: response.content.clone(),
                 };
-                let assistant_msg = Message {
-                    role: MessageRole::Assistant,
-                    content: json!({ "content": assistant_content, "tool_calls": tool_calls }),
-                };
-                messages.push(assistant_msg.clone());
+                messages.push(assistant_msg);
+
+                let assistant_content_json =
+                    serde_json::to_value(&response.content).unwrap_or_default();
                 self.store_message(
                     tenant_id,
                     conversation_id,
                     "assistant",
-                    &assistant_msg.content,
+                    &assistant_content_json,
                     agent_name,
                 )
                 .await?;
 
                 let mut step_tool_calls: Vec<crate::actor::ToolCallStep> = Vec::new();
 
-                for tc in tool_calls {
-                    let func = &tc["function"];
-                    let tool_name = func
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    let tool_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let tool_input: serde_json::Value = func
-                        .get("arguments")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| serde_json::from_str(s).ok())
-                        .unwrap_or(json!({}));
+                for block in &response.content {
+                    let (tool_id, tool_name, tool_input) = match block {
+                        ContentBlock::ToolUse { id, name, input } => {
+                            (id.clone(), name.clone(), input.clone())
+                        }
+                        _ => continue,
+                    };
 
                     let mut tool_result = active_dispatcher
-                        .dispatch(tool_name, tool_input.clone(), &tool_ctx)
+                        .dispatch(&tool_name, tool_input.clone(), &tool_ctx)
                         .await;
 
                     // Handle delegation sentinel
@@ -771,7 +792,7 @@ impl AgentEngine {
                                     // Retry the tool call now that the user is connected
                                     tracing::info!(agent = %agent_name, provider = %provider, "user connected, retrying tool");
                                     tool_result = active_dispatcher
-                                        .dispatch(tool_name, tool_input.clone(), &tool_ctx)
+                                        .dispatch(&tool_name, tool_input.clone(), &tool_ctx)
                                         .await;
                                 }
                                 _ => {
@@ -827,7 +848,7 @@ impl AgentEngine {
                             match connected {
                                 Ok(Some(_)) => {
                                     tool_result = active_dispatcher
-                                        .dispatch(tool_name, tool_input.clone(), &tool_ctx)
+                                        .dispatch(&tool_name, tool_input.clone(), &tool_ctx)
                                         .await;
                                 }
                                 _ => {
@@ -877,16 +898,23 @@ impl AgentEngine {
                         is_error,
                     });
 
-                    let tool_msg = Message {
-                        role: MessageRole::Tool,
-                        content: json!({ "tool_call_id": tool_id, "content": result_str }),
+                    let tool_msg = LlmMessage {
+                        role: LlmRole::Tool,
+                        content: vec![ContentBlock::ToolResult {
+                            tool_use_id: tool_id.clone(),
+                            content: result_str,
+                            is_error,
+                        }],
                     };
                     messages.push(tool_msg.clone());
+
+                    let tool_content_json =
+                        serde_json::to_value(&tool_msg.content).unwrap_or_default();
                     self.store_message(
                         tenant_id,
                         conversation_id,
                         "tool",
-                        &tool_msg.content,
+                        &tool_content_json,
                         agent_name,
                     )
                     .await?;
@@ -900,11 +928,12 @@ impl AgentEngine {
             }
 
             // Final response — content was already streamed via tx
-            let final_message = response.content.clone();
+            let final_message = extract_text(&response.content);
 
-            if response.thinking.is_some() {
+            let thinking_text = extract_thinking(&response);
+            if thinking_text.is_some() {
                 steps.push(crate::actor::AgentStep {
-                    thinking: response.thinking.clone(),
+                    thinking: thinking_text,
                     tool_calls: None,
                 });
             }
@@ -960,13 +989,185 @@ impl AgentEngine {
     }
 }
 
+// ── Helpers for content block extraction ────────────────────────
+
+/// Extract all text from content blocks, concatenated.
+fn extract_text(content: &[ContentBlock]) -> String {
+    content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Extract thinking text from the response's reasoning blocks.
+fn extract_thinking(response: &CompletionResponse) -> Option<String> {
+    if response.reasoning.is_empty() {
+        return None;
+    }
+    let text: String = response
+        .reasoning
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Thinking { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// Parse a role string from the database into an `LlmRole`.
+fn parse_role(role: &str) -> Option<LlmRole> {
+    match role {
+        "system" => Some(LlmRole::System),
+        "user" => Some(LlmRole::User),
+        "assistant" => Some(LlmRole::Assistant),
+        "tool" => Some(LlmRole::Tool),
+        _ => None,
+    }
+}
+
+/// Parse stored history content (JSON) back into `Vec<ContentBlock>`.
+///
+/// The DB stores content as `serde_json::Value`. This function handles:
+/// - Plain strings -> `[ContentBlock::Text { text }]`
+/// - Arrays of ContentBlock (serialized by the new engine) -> deserialized directly
+/// - Legacy assistant messages with `{ "content": ..., "tool_calls": [...] }`
+/// - Legacy tool messages with `{ "tool_call_id": ..., "content": ... }`
+fn parse_history_content(role: LlmRole, value: &serde_json::Value) -> Vec<ContentBlock> {
+    // 1. Plain string — wrap in Text block
+    if let Some(text) = value.as_str() {
+        return vec![ContentBlock::Text {
+            text: text.to_string(),
+        }];
+    }
+
+    // 2. Array — try to deserialize as Vec<ContentBlock> (new format)
+    if let Some(arr) = value.as_array() {
+        if let Ok(blocks) = serde_json::from_value::<Vec<ContentBlock>>(value.clone())
+            && !blocks.is_empty()
+        {
+            return blocks;
+        }
+        // Fallback: if it's an array but not ContentBlock, stringify it
+        if !arr.is_empty() {
+            return vec![ContentBlock::Text {
+                text: value.to_string(),
+            }];
+        }
+        return vec![ContentBlock::Text {
+            text: String::new(),
+        }];
+    }
+
+    // 3. Object — handle legacy formats
+    if let Some(obj) = value.as_object() {
+        match role {
+            LlmRole::Assistant => {
+                // Legacy: { "content": "...", "tool_calls": [...] }
+                let mut blocks = Vec::new();
+
+                // Extract text content
+                if let Some(content_val) = obj.get("content") {
+                    if let Some(text) = content_val.as_str() {
+                        if !text.is_empty() {
+                            blocks.push(ContentBlock::Text {
+                                text: text.to_string(),
+                            });
+                        }
+                    } else if !content_val.is_null() {
+                        let text = content_val.to_string();
+                        if !text.is_empty() {
+                            blocks.push(ContentBlock::Text { text });
+                        }
+                    }
+                }
+
+                // Extract tool calls from legacy format
+                if let Some(tool_calls) = obj.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in tool_calls {
+                        // Legacy OpenAI format: { id, type, function: { name, arguments } }
+                        if let Some(func) = tc.get("function") {
+                            let name = func
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let id = tc
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let input: serde_json::Value = func
+                                .get("arguments")
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| serde_json::from_str(s).ok())
+                                .unwrap_or(serde_json::json!({}));
+                            blocks.push(ContentBlock::ToolUse { id, name, input });
+                        }
+                        // Anthropic-style: { type: "tool_use", id, name, input }
+                        else if tc.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                            let id = tc
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let name = tc
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let input = tc.get("input").cloned().unwrap_or(serde_json::json!({}));
+                            blocks.push(ContentBlock::ToolUse { id, name, input });
+                        }
+                    }
+                }
+
+                if blocks.is_empty() {
+                    blocks.push(ContentBlock::Text {
+                        text: value.to_string(),
+                    });
+                }
+                return blocks;
+            }
+            LlmRole::Tool => {
+                // Legacy: { "tool_call_id": "...", "content": "..." }
+                if let Some(tool_call_id) = obj.get("tool_call_id").and_then(|v| v.as_str()) {
+                    let content = obj
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    return vec![ContentBlock::ToolResult {
+                        tool_use_id: tool_call_id.to_string(),
+                        content,
+                        is_error: false,
+                    }];
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Fallback: stringify whatever we got
+    vec![ContentBlock::Text {
+        text: value.to_string(),
+    }]
+}
+
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tools::{Tool, ToolResult};
+    use serde_json::json;
     use std::sync::Arc;
+    use std::time::Duration;
 
     /// A trivial echo tool for testing.
     struct EchoTool;
@@ -1009,29 +1210,34 @@ mod tests {
     async fn mock_simple_response() {
         let pool = test_pool();
         let dispatcher = ToolDispatcher::new();
-        let caller = Arc::new(MockLlmCaller::simple("Hello, I'm the agent!"));
+        let provider = Arc::new(MockLlmProvider::simple("Hello, I'm the agent!"));
 
-        let engine = AgentEngine::new(pool, reqwest::Client::new(), dispatcher, caller, None, None);
+        let engine = AgentEngine::new(
+            pool,
+            reqwest::Client::new(),
+            dispatcher,
+            provider,
+            None,
+            None,
+        );
 
-        // We can't actually run the full engine because it tries to load from DB,
-        // but we can verify the mock caller works.
-        let request = LlmRequest {
-            messages: vec![Message {
-                role: MessageRole::User,
-                content: json!("Hi"),
+        let request = CompletionRequest {
+            messages: vec![LlmMessage {
+                role: LlmRole::User,
+                content: vec![ContentBlock::Text {
+                    text: "Hi".to_string(),
+                }],
             }],
-            model: "test".to_string(),
-            max_tokens: Some(1024),
-            temperature: Some(0.7),
-            stream: false,
-            tools: None,
-            extra: json!({}),
+            model: Some("test".to_string()),
+            max_tokens: 1024,
+            temperature: 0.7,
+            tools: vec![],
+            stop_sequences: vec![],
         };
 
-        let (response, backend_id) = engine.llm_caller.call(Uuid::nil(), &request).await.unwrap();
-        assert_eq!(response.content, "Hello, I'm the agent!");
-        assert_eq!(response.finish_reason.as_deref(), Some("end_turn"));
-        assert!(backend_id.is_none());
+        let response = engine.llm_provider.complete(request).await.unwrap();
+        assert_eq!(extract_text(&response.content), "Hello, I'm the agent!");
+        assert_eq!(response.stop_reason, StopReason::EndTurn);
     }
 
     #[tokio::test]
@@ -1040,32 +1246,41 @@ mod tests {
         let mut dispatcher = ToolDispatcher::new();
         dispatcher.register(Arc::new(EchoTool));
 
-        let caller = Arc::new(MockLlmCaller::with_tool_call(
+        let provider = Arc::new(MockLlmProvider::with_tool_call(
             "echo",
             json!({"message": "test"}),
             "Done echoing!",
         ));
 
-        let engine = AgentEngine::new(pool, reqwest::Client::new(), dispatcher, caller, None, None);
+        let engine = AgentEngine::new(
+            pool,
+            reqwest::Client::new(),
+            dispatcher,
+            provider,
+            None,
+            None,
+        );
 
-        // Verify the mock produces tool calls then a final response
-        let request = LlmRequest {
+        let request = CompletionRequest {
             messages: vec![],
-            model: "test".to_string(),
-            max_tokens: Some(1024),
-            temperature: Some(0.7),
-            stream: false,
-            tools: None,
-            extra: json!({}),
+            model: Some("test".to_string()),
+            max_tokens: 1024,
+            temperature: 0.7,
+            tools: vec![],
+            stop_sequences: vec![],
         };
 
-        let (r1, _) = engine.llm_caller.call(Uuid::nil(), &request).await.unwrap();
-        assert!(r1.tool_calls.is_some());
-        assert_eq!(r1.finish_reason.as_deref(), Some("tool_use"));
+        let r1 = engine.llm_provider.complete(request.clone()).await.unwrap();
+        assert_eq!(r1.stop_reason, StopReason::ToolUse);
+        assert!(
+            r1.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+        );
 
-        let (r2, _) = engine.llm_caller.call(Uuid::nil(), &request).await.unwrap();
-        assert!(r2.tool_calls.is_none());
-        assert_eq!(r2.content, "Done echoing!");
+        let r2 = engine.llm_provider.complete(request).await.unwrap();
+        assert_eq!(r2.stop_reason, StopReason::EndTurn);
+        assert_eq!(extract_text(&r2.content), "Done echoing!");
     }
 
     #[test]
@@ -1080,5 +1295,142 @@ mod tests {
         assert_eq!(usage.output_tokens, 50);
         assert_eq!(usage.llm_calls, 1);
         assert_eq!(usage.tool_calls, 2);
+    }
+
+    #[test]
+    fn parse_role_works() {
+        assert_eq!(parse_role("user"), Some(LlmRole::User));
+        assert_eq!(parse_role("assistant"), Some(LlmRole::Assistant));
+        assert_eq!(parse_role("tool"), Some(LlmRole::Tool));
+        assert_eq!(parse_role("system"), Some(LlmRole::System));
+        assert_eq!(parse_role("bogus"), None);
+    }
+
+    #[test]
+    fn parse_history_content_plain_string() {
+        let val = serde_json::Value::String("hello".to_string());
+        let blocks = parse_history_content(LlmRole::User, &val);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0],
+            ContentBlock::Text {
+                text: "hello".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_history_content_new_format_array() {
+        let blocks_json = serde_json::to_value(&vec![
+            ContentBlock::Text {
+                text: "thinking...".to_string(),
+            },
+            ContentBlock::ToolUse {
+                id: "call_1".to_string(),
+                name: "echo".to_string(),
+                input: json!({"message": "hi"}),
+            },
+        ])
+        .unwrap();
+
+        let parsed = parse_history_content(LlmRole::Assistant, &blocks_json);
+        assert_eq!(parsed.len(), 2);
+        assert!(matches!(&parsed[0], ContentBlock::Text { text } if text == "thinking..."));
+        assert!(matches!(&parsed[1], ContentBlock::ToolUse { name, .. } if name == "echo"));
+    }
+
+    #[test]
+    fn parse_history_content_legacy_tool_result() {
+        let val = json!({
+            "tool_call_id": "call_123",
+            "content": "result text"
+        });
+        let blocks = parse_history_content(LlmRole::Tool, &val);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(
+            &blocks[0],
+            ContentBlock::ToolResult { tool_use_id, content, is_error }
+            if tool_use_id == "call_123" && content == "result text" && !is_error
+        ));
+    }
+
+    #[test]
+    fn parse_history_content_legacy_assistant_with_tool_calls() {
+        let val = json!({
+            "content": "Let me help.",
+            "tool_calls": [{
+                "id": "call_001",
+                "type": "function",
+                "function": {
+                    "name": "search",
+                    "arguments": "{\"query\": \"rust\"}"
+                }
+            }]
+        });
+        let blocks = parse_history_content(LlmRole::Assistant, &val);
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "Let me help."));
+        assert!(
+            matches!(&blocks[1], ContentBlock::ToolUse { id, name, .. } if id == "call_001" && name == "search")
+        );
+    }
+
+    #[test]
+    fn extract_text_concatenates() {
+        let blocks = vec![
+            ContentBlock::Text {
+                text: "Hello ".to_string(),
+            },
+            ContentBlock::ToolUse {
+                id: "x".to_string(),
+                name: "y".to_string(),
+                input: json!({}),
+            },
+            ContentBlock::Text {
+                text: "world".to_string(),
+            },
+        ];
+        assert_eq!(extract_text(&blocks), "Hello world");
+    }
+
+    #[test]
+    fn extract_thinking_from_reasoning() {
+        let response = CompletionResponse {
+            content: vec![ContentBlock::Text {
+                text: "answer".to_string(),
+            }],
+            reasoning: vec![ContentBlock::Thinking {
+                text: "I need to think about this.".to_string(),
+            }],
+            stop_reason: StopReason::EndTurn,
+            usage: casper_llm::TokenUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+            },
+            model: "test".to_string(),
+            latency: Duration::from_millis(1),
+        };
+        assert_eq!(
+            extract_thinking(&response),
+            Some("I need to think about this.".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_thinking_empty_reasoning() {
+        let response = CompletionResponse {
+            content: vec![ContentBlock::Text {
+                text: "answer".to_string(),
+            }],
+            reasoning: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: casper_llm::TokenUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+            },
+            model: "test".to_string(),
+            latency: Duration::from_millis(1),
+        };
+        assert_eq!(extract_thinking(&response), None);
     }
 }

@@ -39,7 +39,7 @@ docker compose up -d             # Full stack (db + server + searxng)
 ### Crate dependency graph
 ```
 casper-base          Foundation: types, DB pools, JWT, auth, vault, observability
-  └── casper-catalog   Model routing, quotas + LLM provider dispatch (Anthropic, OpenAI)
+  └── casper-llm   Model routing, quotas + LLM provider dispatch (Anthropic, OpenAI)
         └── casper-agent   ReAct engine, prompt assembly, tools, MCP client, delegation
 casper-wire            WebSocket protocol types (shared between server and agent-backend sidecar)
 ```
@@ -66,8 +66,8 @@ Row-level security (RLS) via PostgreSQL. `TenantDb` sets `app.tenant_id` config 
 ### Agent engine (casper-agent)
 The ReAct loop in `engine/mod.rs`: loads agent config → assembles system prompt via `PromptContext` → calls LLM → dispatches tools → loops until end_turn or max_turns. Delegation to child agents via `DelegationRequest`. Streaming uses `RunStreamRequest`.
 
-### LLM dispatch (casper-catalog)
-`resolve_deployment` finds backend sequence by tenant + slug. `dispatch_with_retry` tries each backend with exponential backoff and fallback. Anthropic and OpenAI adapters normalize to a unified `LlmRequest`/`LlmResponse` format.
+### LLM providers (casper-llm)
+`LlmProvider` trait with `complete()` and `complete_stream()` using strongly-typed `CompletionRequest`/`CompletionResponse`/`ContentBlock`. `AnthropicProvider` and `OpenAiProvider` implement it for HTTP APIs. `RoutedProvider` (in casper-server) adds tenant routing, quota checks, and retry/fallback. `create_provider()` factory maps backend configs to provider instances.
 
 ## Database
 

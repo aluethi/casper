@@ -6,7 +6,7 @@ WORKDIR /app
 # Copy manifests first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 COPY crates/casper-base/Cargo.toml crates/casper-base/Cargo.toml
-COPY crates/casper-catalog/Cargo.toml crates/casper-catalog/Cargo.toml
+COPY crates/casper-llm/Cargo.toml crates/casper-llm/Cargo.toml
 COPY crates/casper-agent/Cargo.toml crates/casper-agent/Cargo.toml
 COPY crates/casper-wire/Cargo.toml crates/casper-wire/Cargo.toml
 COPY casper-server/Cargo.toml casper-server/Cargo.toml
@@ -15,7 +15,7 @@ COPY casper-agent-backend/Cargo.toml casper-agent-backend/Cargo.toml
 
 # Create stub source files so cargo can resolve the workspace and cache deps
 RUN mkdir -p crates/casper-base/src && echo "pub fn _stub(){}" > crates/casper-base/src/lib.rs && \
-    mkdir -p crates/casper-catalog/src && echo "pub fn _stub(){}" > crates/casper-catalog/src/lib.rs && \
+    mkdir -p crates/casper-llm/src && echo "pub fn _stub(){}" > crates/casper-llm/src/lib.rs && \
     mkdir -p crates/casper-agent/src && echo "pub fn _stub(){}" > crates/casper-agent/src/lib.rs && \
     mkdir -p crates/casper-wire/src && echo "pub fn _stub(){}" > crates/casper-wire/src/lib.rs && \
     mkdir -p casper-server/src && echo "fn main(){}" > casper-server/src/main.rs && \

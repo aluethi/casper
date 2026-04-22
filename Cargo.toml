@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "crates/casper-base",
-    "crates/casper-catalog",
+    "crates/casper-llm",
     "crates/casper-agent",
     "casper-server",
     "casper-cli",
@@ -86,6 +86,6 @@ dirs = "6"
 
 # Workspace crates
 casper-base = { path = "crates/casper-base" }
-casper-catalog = { path = "crates/casper-catalog" }
+casper-llm = { path = "crates/casper-llm" }
 casper-agent = { path = "crates/casper-agent" }
 casper-wire = { path = "crates/casper-wire" }

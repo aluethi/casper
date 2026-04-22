@@ -91,7 +91,7 @@ casper/
 │   ├── casper-observe/       # Audit writer, usage tracking, Prometheus metrics
 │   │
 │   │  ── Inference ──
-│   ├── casper-catalog/       # Model catalog, backends, quotas, deployments, routing
+│   ├── casper-llm/       # Model catalog, backends, quotas, deployments, routing
 │   ├── casper-proxy/         # LLM provider dispatch (Anthropic, OpenAI-compatible)
 │   │
 │   │  ── Agent ──
@@ -113,7 +113,7 @@ casper/
               /     |     \
      casper-db  casper-auth  casper-vault   ← DB access, crypto
           |         |            |
-     casper-observe  casper-catalog         ← business logic
+     casper-observe  casper-llm         ← business logic
           |              |
      casper-proxy   casper-knowledge        ← external calls
           |              |
