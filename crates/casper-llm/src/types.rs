@@ -74,6 +74,10 @@ pub struct CompletionRequest {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stop_sequences: Vec<String>,
+    /// Provider-specific parameters merged into the HTTP request body.
+    /// Used for features like extended thinking, response_format, etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

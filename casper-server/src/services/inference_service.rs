@@ -151,6 +151,7 @@ pub async fn chat_completions(
             temperature: req.temperature.unwrap_or(0.7) as f32,
             tools: tools.clone(),
             stop_sequences: vec![],
+            extra: None,
         };
 
         let provider = state.llm.for_tenant(tenant_id);

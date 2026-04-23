@@ -107,6 +107,8 @@ impl LlmProvider for OpenAiProvider {
             body["stop"] = json!(request.stop_sequences);
         }
 
+        merge_extra(&mut body, &request.extra);
+
         let url = self.url();
         let http_req = self
             .apply_auth(self.client.post(&url))
@@ -159,6 +161,8 @@ impl LlmProvider for OpenAiProvider {
         if !request.stop_sequences.is_empty() {
             body["stop"] = json!(request.stop_sequences);
         }
+
+        merge_extra(&mut body, &request.extra);
 
         let url = self.url();
         let http_req = self
@@ -418,6 +422,17 @@ fn build_messages(messages: &[LlmMessage]) -> Vec<serde_json::Value> {
     }
 
     out
+}
+
+fn merge_extra(body: &mut serde_json::Value, extra: &Option<serde_json::Value>) {
+    if let Some(serde_json::Value::Object(params)) = extra {
+        let body_obj = body.as_object_mut().unwrap();
+        for (k, v) in params {
+            if !body_obj.contains_key(k) {
+                body_obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
 }
 
 fn extract_text(blocks: &[ContentBlock]) -> String {

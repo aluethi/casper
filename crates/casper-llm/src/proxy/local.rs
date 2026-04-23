@@ -197,6 +197,7 @@ mod tests {
             temperature: 0.7,
             model: Some("local-model".to_string()),
             stop_sequences: vec![],
+            extra: None,
         };
         let wire = build_request(&req);
         assert_eq!(wire["model"], "local-model");
@@ -223,6 +224,7 @@ mod tests {
             temperature: 0.7,
             model: Some("test".to_string()),
             stop_sequences: vec![],
+            extra: None,
         };
         let result = parse_response(&resp, &req, std::time::Duration::from_millis(50)).unwrap();
         assert_eq!(result.content.len(), 1);
@@ -255,6 +257,7 @@ mod tests {
             temperature: 0.7,
             model: None,
             stop_sequences: vec![],
+            extra: None,
         };
         let result = parse_response(&resp, &req, std::time::Duration::ZERO).unwrap();
         assert_eq!(result.stop_reason, StopReason::ToolUse);
@@ -285,6 +288,7 @@ mod tests {
             temperature: 0.0,
             model: Some("local".to_string()),
             stop_sequences: vec![],
+            extra: None,
         };
 
         let response = provider.complete(request).await.unwrap();

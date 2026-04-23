@@ -58,6 +58,7 @@ impl LlmProvider for AnthropicProvider {
         if !request.stop_sequences.is_empty() {
             body["stop_sequences"] = json!(request.stop_sequences);
         }
+        merge_extra(&mut body, &request.extra);
 
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
@@ -113,6 +114,7 @@ impl LlmProvider for AnthropicProvider {
         if !request.stop_sequences.is_empty() {
             body["stop_sequences"] = json!(request.stop_sequences);
         }
+        merge_extra(&mut body, &request.extra);
 
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
@@ -379,6 +381,17 @@ fn content_block_to_anthropic(block: &ContentBlock) -> serde_json::Value {
             "content": content,
             "is_error": is_error,
         }),
+    }
+}
+
+fn merge_extra(body: &mut serde_json::Value, extra: &Option<serde_json::Value>) {
+    if let Some(serde_json::Value::Object(params)) = extra {
+        let body_obj = body.as_object_mut().unwrap();
+        for (k, v) in params {
+            if !body_obj.contains_key(k) {
+                body_obj.insert(k.clone(), v.clone());
+            }
+        }
     }
 }
 

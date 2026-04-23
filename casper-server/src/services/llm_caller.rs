@@ -8,7 +8,9 @@ use futures::Stream;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::routing::{ResolvedBackend, ResolvedDeployment, check_quota, resolve_deployment};
+use super::routing::{
+    ResolvedBackend, ResolvedDeployment, check_quota, merge_params, resolve_deployment,
+};
 use crate::ws::AgentBackendRegistry;
 
 // ── Provider factory ────────────────────────────────────────────
@@ -214,8 +216,7 @@ impl LlmProvider for TenantProvider {
         let deployment = resolve_deployment(&self.inner.db, self.tenant_id, model_slug).await?;
         check_quota(&self.inner.db, self.tenant_id, deployment.model_id).await?;
 
-        let mut patched = request;
-        patched.model = Some(deployment.model_name.clone());
+        let patched = apply_deployment(&deployment, request);
 
         let (response, _backend) = self
             .inner
@@ -233,11 +234,21 @@ impl LlmProvider for TenantProvider {
         let deployment = resolve_deployment(&self.inner.db, self.tenant_id, model_slug).await?;
         check_quota(&self.inner.db, self.tenant_id, deployment.model_id).await?;
 
-        let mut patched = request;
-        patched.model = Some(deployment.model_name.clone());
+        let patched = apply_deployment(&deployment, request);
 
         self.inner
             .dispatch_stream_with_fallback(&deployment, patched)
             .await
     }
+}
+
+fn apply_deployment(
+    deployment: &ResolvedDeployment,
+    mut request: CompletionRequest,
+) -> CompletionRequest {
+    request.model = Some(deployment.model_name.clone());
+    let request_extra = request.extra.unwrap_or(serde_json::Value::Null);
+    let merged = merge_params(&deployment.default_params, &request_extra);
+    request.extra = if merged.is_null() { None } else { Some(merged) };
+    request
 }

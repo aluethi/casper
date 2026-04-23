@@ -9,7 +9,6 @@
 //! 6. Enforces a maximum number of turns to prevent infinite loops
 
 mod helpers;
-pub mod llm;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -39,9 +38,6 @@ pub struct RunStreamRequest {
     pub tx: mpsc::Sender<StreamEvent>,
     pub ask_rx: mpsc::Receiver<String>,
 }
-
-#[cfg(test)]
-pub use llm::MockLlmProvider;
 
 /// Maximum number of ReAct loop iterations before we bail out.
 const DEFAULT_MAX_TURNS: usize = 25;
@@ -231,6 +227,7 @@ impl AgentEngine {
                 temperature: config.temperature as f32,
                 tools: tool_defs.clone(),
                 stop_sequences: vec![],
+                extra: None,
             };
 
             let response = self.llm_provider.complete(request).await?;
@@ -559,6 +556,7 @@ impl AgentEngine {
                 temperature: config.temperature as f32,
                 tools: tool_defs.clone(),
                 stop_sequences: vec![],
+                extra: None,
             };
 
             // Stream LLM response — forward events to SSE while accumulating
@@ -1165,6 +1163,7 @@ fn parse_history_content(role: LlmRole, value: &serde_json::Value) -> Vec<Conten
 mod tests {
     use super::*;
     use crate::tools::{Tool, ToolResult};
+    use casper_llm::MockLlmProvider;
     use serde_json::json;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1233,6 +1232,7 @@ mod tests {
             temperature: 0.7,
             tools: vec![],
             stop_sequences: vec![],
+            extra: None,
         };
 
         let response = engine.llm_provider.complete(request).await.unwrap();
@@ -1268,6 +1268,7 @@ mod tests {
             temperature: 0.7,
             tools: vec![],
             stop_sequences: vec![],
+            extra: None,
         };
 
         let r1 = engine.llm_provider.complete(request.clone()).await.unwrap();

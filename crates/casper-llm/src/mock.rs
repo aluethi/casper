@@ -1,25 +1,16 @@
-//! Mock LLM provider for testing.
-
-#[cfg(test)]
 use std::pin::Pin;
-#[cfg(test)]
 use std::time::Duration;
 
-#[cfg(test)]
 use casper_base::CasperError;
-#[cfg(test)]
-use casper_llm::{
-    CompletionRequest, CompletionResponse, ContentBlock, LlmProvider, StopReason, TokenUsage,
-};
-#[cfg(test)]
 use futures::Stream;
 
-#[cfg(test)]
+use crate::provider::LlmProvider;
+use crate::types::{CompletionRequest, CompletionResponse, ContentBlock, StopReason, TokenUsage};
+
 pub struct MockLlmProvider {
     responses: std::sync::Mutex<Vec<CompletionResponse>>,
 }
 
-#[cfg(test)]
 impl MockLlmProvider {
     pub fn new(responses: Vec<CompletionResponse>) -> Self {
         Self {
@@ -91,7 +82,6 @@ impl MockLlmProvider {
     }
 }
 
-#[cfg(test)]
 #[async_trait::async_trait]
 impl LlmProvider for MockLlmProvider {
     fn name(&self) -> &str {
