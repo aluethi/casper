@@ -101,8 +101,13 @@ impl LlmProvider for MockLlmProvider {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ContentBlock, CasperError>> + Send>>, CasperError>
     {
         let response = self.next_response()?;
-        let blocks: Vec<Result<ContentBlock, CasperError>> =
-            response.content.into_iter().map(Ok).collect();
+        let mut blocks: Vec<Result<ContentBlock, CasperError>> = Vec::new();
+        for block in response.reasoning {
+            blocks.push(Ok(block));
+        }
+        for block in response.content {
+            blocks.push(Ok(block));
+        }
         Ok(Box::pin(futures::stream::iter(blocks)))
     }
 }

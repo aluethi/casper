@@ -57,8 +57,13 @@ impl LlmProvider for LocalLlmProvider {
         CasperError,
     > {
         let response = self.complete(request).await?;
-        let blocks: Vec<Result<ContentBlock, CasperError>> =
-            response.content.into_iter().map(Ok).collect();
+        let mut blocks: Vec<Result<ContentBlock, CasperError>> = Vec::new();
+        for block in response.reasoning {
+            blocks.push(Ok(block));
+        }
+        for block in response.content {
+            blocks.push(Ok(block));
+        }
         Ok(Box::pin(futures::stream::iter(blocks)))
     }
 }
@@ -83,12 +88,23 @@ fn build_request(request: &CompletionRequest) -> serde_json::Value {
         })
         .collect();
 
-    json!({
+    let mut body = json!({
         "model": request.model,
         "messages": messages,
         "max_tokens": request.max_tokens,
         "temperature": request.temperature,
-    })
+    });
+
+    if let Some(serde_json::Value::Object(params)) = &request.extra {
+        let body_obj = body.as_object_mut().unwrap();
+        for (k, v) in params {
+            if !body_obj.contains_key(k) {
+                body_obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    body
 }
 
 // ── Response conversion ───────────────────────────────────────────
