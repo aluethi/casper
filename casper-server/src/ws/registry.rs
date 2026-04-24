@@ -152,6 +152,26 @@ impl AgentBackendRegistry {
                     Ok(Some(WsMessage::InferenceChunk { delta, .. })) => {
                         yield Ok(json!({ "delta": delta }));
                     }
+                    Ok(Some(WsMessage::InferenceThinking { delta, .. })) => {
+                        yield Ok(json!({ "thinking_delta": delta }));
+                    }
+                    Ok(Some(WsMessage::InferenceToolCall(tc))) => {
+                        yield Ok(json!({
+                            "tool_call_start": {
+                                "tool_index": tc.tool_index,
+                                "tool_call_id": tc.tool_call_id,
+                                "name": tc.name,
+                            }
+                        }));
+                    }
+                    Ok(Some(WsMessage::InferenceToolCallDelta { tool_index, arguments_delta, .. })) => {
+                        yield Ok(json!({
+                            "tool_call_delta": {
+                                "tool_index": tool_index,
+                                "arguments_delta": arguments_delta,
+                            }
+                        }));
+                    }
                     Ok(Some(WsMessage::InferenceDone(done))) => {
                         let usage = done.usage.unwrap_or_default();
                         yield Ok(json!({

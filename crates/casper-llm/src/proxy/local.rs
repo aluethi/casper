@@ -67,15 +67,44 @@ impl LlmProvider for LocalLlmProvider {
         let mut usage = TokenUsage::default();
         let mut stop_reason = None;
         let mut model = request.model.clone().unwrap_or_else(|| "local".to_string());
+        let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
+            std::collections::HashMap::new();
 
         while let Some(item) = stream.next().await {
             let chunk = item?;
-            // Streaming delta
+            // Streaming text delta
             if let Some(delta) = chunk["delta"].as_str() {
                 if !delta.is_empty() {
                     content.push(ContentBlock::Text {
                         text: delta.to_string(),
                     });
+                }
+                continue;
+            }
+            // Streaming thinking delta
+            if let Some(delta) = chunk["thinking_delta"].as_str() {
+                if !delta.is_empty() {
+                    reasoning.push(ContentBlock::Thinking {
+                        text: delta.to_string(),
+                    });
+                }
+                continue;
+            }
+            // Streaming tool call start
+            if let Some(tc) = chunk.get("tool_call_start") {
+                let idx = tc["tool_index"].as_u64().unwrap_or(0) as usize;
+                let id = tc["tool_call_id"].as_str().unwrap_or("").to_string();
+                let name = tc["name"].as_str().unwrap_or("").to_string();
+                tool_acc.insert(idx, (id, name, String::new()));
+                continue;
+            }
+            // Streaming tool call argument delta
+            if let Some(td) = chunk.get("tool_call_delta") {
+                let idx = td["tool_index"].as_u64().unwrap_or(0) as usize;
+                if let Some(entry) = tool_acc.get_mut(&idx)
+                    && let Some(args) = td["arguments_delta"].as_str()
+                {
+                    entry.2.push_str(args);
                 }
                 continue;
             }
@@ -94,6 +123,15 @@ impl LlmProvider for LocalLlmProvider {
             if let Some(m) = chunk["model"].as_str() {
                 model = m.to_string();
             }
+        }
+
+        // Finalize accumulated tool calls
+        let mut indices: Vec<usize> = tool_acc.keys().copied().collect();
+        indices.sort();
+        for idx in indices {
+            let (id, name, args) = tool_acc.remove(&idx).unwrap();
+            let input: serde_json::Value = serde_json::from_str(&args).unwrap_or(json!({}));
+            content.push(ContentBlock::ToolUse { id, name, input });
         }
 
         let has_tool_use = content
@@ -122,33 +160,133 @@ impl LlmProvider for LocalLlmProvider {
         let wire_request = build_request(&request);
         let json_stream = (self.transport)(wire_request).await?;
 
-        let block_stream = json_stream.filter_map(|item| async move {
-            match item {
-                Err(e) => Some(Err(e)),
-                Ok(chunk) => {
-                    // Streaming text delta
-                    if let Some(delta) = chunk["delta"].as_str() {
-                        if !delta.is_empty() {
-                            return Some(Ok(ContentBlock::Text {
-                                text: delta.to_string(),
-                            }));
-                        }
-                        return None;
-                    }
-                    // Full response fallback — emit each block
-                    if let Some(msg) = chunk.get("message") {
-                        let mut blocks = Vec::new();
-                        parse_message_into(msg, &mut blocks, &mut Vec::new());
-                        if let Some(first) = blocks.into_iter().next() {
-                            return Some(Ok(first));
-                        }
-                    }
-                    None
+        let block_stream = futures::stream::unfold(
+            StreamState {
+                inner: Box::pin(json_stream),
+                tool_acc: std::collections::HashMap::new(),
+                pending: Vec::new(),
+                done: false,
+            },
+            |mut state| async move {
+                // Drain pending blocks first (from message fallback or finalized tools)
+                if let Some(block) = state.pending.pop() {
+                    return Some((Ok(block), state));
                 }
-            }
-        });
+                if state.done {
+                    return None;
+                }
+
+                loop {
+                    match state.inner.next().await {
+                        Some(Err(e)) => {
+                            state.done = true;
+                            return Some((Err(e), state));
+                        }
+                        Some(Ok(chunk)) => {
+                            // Text delta
+                            if let Some(delta) = chunk["delta"].as_str() {
+                                if !delta.is_empty() {
+                                    return Some((
+                                        Ok(ContentBlock::Text {
+                                            text: delta.to_string(),
+                                        }),
+                                        state,
+                                    ));
+                                }
+                                continue;
+                            }
+                            // Thinking delta
+                            if let Some(delta) = chunk["thinking_delta"].as_str() {
+                                if !delta.is_empty() {
+                                    return Some((
+                                        Ok(ContentBlock::Thinking {
+                                            text: delta.to_string(),
+                                        }),
+                                        state,
+                                    ));
+                                }
+                                continue;
+                            }
+                            // Tool call start — begin accumulating arguments
+                            if let Some(tc) = chunk.get("tool_call_start") {
+                                let idx = tc["tool_index"].as_u64().unwrap_or(0) as usize;
+                                let id = tc["tool_call_id"].as_str().unwrap_or("").to_string();
+                                let name = tc["name"].as_str().unwrap_or("").to_string();
+                                state.tool_acc.insert(idx, (id, name, String::new()));
+                                continue;
+                            }
+                            // Tool call argument delta
+                            if let Some(td) = chunk.get("tool_call_delta") {
+                                let idx = td["tool_index"].as_u64().unwrap_or(0) as usize;
+                                if let Some(entry) = state.tool_acc.get_mut(&idx)
+                                    && let Some(args) = td["arguments_delta"].as_str()
+                                {
+                                    entry.2.push_str(args);
+                                }
+                                continue;
+                            }
+                            // Full response fallback — emit all blocks
+                            if let Some(msg) = chunk.get("message") {
+                                let mut blocks = Vec::new();
+                                parse_message_into(msg, &mut blocks, &mut Vec::new());
+                                // Reverse so pop() yields them in order
+                                blocks.reverse();
+                                state.pending = blocks;
+                                if let Some(block) = state.pending.pop() {
+                                    return Some((Ok(block), state));
+                                }
+                                continue;
+                            }
+                            // Done — finalize any accumulated tool calls
+                            if chunk.get("done").is_some() {
+                                state.finalize_tools();
+                                state.done = true;
+                                if let Some(block) = state.pending.pop() {
+                                    return Some((Ok(block), state));
+                                }
+                                return None;
+                            }
+                            continue;
+                        }
+                        None => {
+                            // Stream ended — finalize any remaining tool calls
+                            state.finalize_tools();
+                            state.done = true;
+                            if let Some(block) = state.pending.pop() {
+                                return Some((Ok(block), state));
+                            }
+                            return None;
+                        }
+                    }
+                }
+            },
+        );
 
         Ok(Box::pin(block_stream))
+    }
+}
+
+struct StreamState {
+    inner: Pin<Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>>,
+    tool_acc: std::collections::HashMap<usize, (String, String, String)>,
+    pending: Vec<ContentBlock>,
+    done: bool,
+}
+
+impl StreamState {
+    fn finalize_tools(&mut self) {
+        if self.tool_acc.is_empty() {
+            return;
+        }
+        let mut indices: Vec<usize> = self.tool_acc.keys().copied().collect();
+        indices.sort();
+        // Reverse so pop() yields them in order
+        indices.reverse();
+        for idx in indices {
+            let (id, name, args) = self.tool_acc.remove(&idx).unwrap();
+            let input: serde_json::Value = serde_json::from_str(&args).unwrap_or(json!({}));
+            self.pending.push(ContentBlock::ToolUse { id, name, input });
+        }
     }
 }
 
@@ -328,5 +466,151 @@ mod tests {
         assert!(
             matches!(&response.content[0], ContentBlock::Text { text } if text == "Full response")
         );
+    }
+
+    #[tokio::test]
+    async fn streaming_thinking_deltas() {
+        let provider = LocalLlmProvider::new(|_req| async {
+            let chunks = vec![
+                Ok(json!({ "thinking_delta": "Let me " })),
+                Ok(json!({ "thinking_delta": "think..." })),
+                Ok(json!({ "delta": "The answer is 42." })),
+                Ok(json!({ "done": true })),
+            ];
+            Ok(Box::pin(futures::stream::iter(chunks))
+                as Pin<
+                    Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>,
+                >)
+        });
+
+        let request = CompletionRequest {
+            messages: vec![],
+            tools: vec![],
+            max_tokens: 512,
+            temperature: 0.0,
+            model: Some("local".to_string()),
+            stop_sequences: vec![],
+            extra: None,
+        };
+
+        let mut stream = provider.complete_stream(request).await.unwrap();
+        let mut thinking = Vec::new();
+        let mut content = Vec::new();
+        while let Some(Ok(block)) = stream.next().await {
+            match block {
+                ContentBlock::Thinking { text } => thinking.push(text),
+                ContentBlock::Text { text } => content.push(text),
+                _ => {}
+            }
+        }
+        assert_eq!(thinking, vec!["Let me ", "think..."]);
+        assert_eq!(content, vec!["The answer is 42."]);
+    }
+
+    #[tokio::test]
+    async fn streaming_tool_calls() {
+        let provider = LocalLlmProvider::new(|_req| async {
+            let chunks = vec![
+                Ok(json!({ "delta": "Let me search." })),
+                Ok(
+                    json!({ "tool_call_start": { "tool_index": 0, "tool_call_id": "call_1", "name": "web_search" } }),
+                ),
+                Ok(
+                    json!({ "tool_call_delta": { "tool_index": 0, "arguments_delta": "{\"query\":" } }),
+                ),
+                Ok(
+                    json!({ "tool_call_delta": { "tool_index": 0, "arguments_delta": "\"rust\"}" } }),
+                ),
+                Ok(json!({ "done": true })),
+            ];
+            Ok(Box::pin(futures::stream::iter(chunks))
+                as Pin<
+                    Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>,
+                >)
+        });
+
+        let request = CompletionRequest {
+            messages: vec![],
+            tools: vec![],
+            max_tokens: 512,
+            temperature: 0.0,
+            model: Some("local".to_string()),
+            stop_sequences: vec![],
+            extra: None,
+        };
+
+        // Test streaming
+        let mut stream = provider.complete_stream(request.clone()).await.unwrap();
+        let mut blocks = Vec::new();
+        while let Some(Ok(block)) = stream.next().await {
+            blocks.push(block);
+        }
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "Let me search."));
+        assert!(
+            matches!(&blocks[1], ContentBlock::ToolUse { name, input, .. } if name == "web_search" && input["query"] == "rust")
+        );
+
+        // Test complete (accumulates same blocks)
+        let response = provider.complete(request).await.unwrap();
+        assert_eq!(response.content.len(), 2);
+        assert!(
+            matches!(&response.content[1], ContentBlock::ToolUse { name, .. } if name == "web_search")
+        );
+        assert_eq!(response.stop_reason, StopReason::ToolUse);
+    }
+
+    #[tokio::test]
+    async fn full_response_with_tool_calls() {
+        let provider = LocalLlmProvider::new(|_req| async {
+            let chunks = vec![Ok(json!({
+                "message": {
+                    "role": "assistant",
+                    "content": "Let me check.",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": { "name": "get_weather", "arguments": "{\"city\":\"Zurich\"}" }
+                    }]
+                },
+                "stop_reason": "tool_calls",
+                "usage": { "input_tokens": 10, "output_tokens": 5 }
+            }))];
+            Ok(Box::pin(futures::stream::iter(chunks))
+                as Pin<
+                    Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>,
+                >)
+        });
+
+        let request = CompletionRequest {
+            messages: vec![],
+            tools: vec![],
+            max_tokens: 1024,
+            temperature: 0.0,
+            model: Some("test".to_string()),
+            stop_sequences: vec![],
+            extra: None,
+        };
+
+        // complete() should return both text and tool_use blocks
+        let response = provider.complete(request.clone()).await.unwrap();
+        assert_eq!(response.content.len(), 2);
+        assert!(
+            matches!(&response.content[0], ContentBlock::Text { text } if text == "Let me check.")
+        );
+        assert!(
+            matches!(&response.content[1], ContentBlock::ToolUse { name, .. } if name == "get_weather")
+        );
+        assert_eq!(response.stop_reason, StopReason::ToolUse);
+
+        // complete_stream() should also emit both blocks
+        let mut stream = provider.complete_stream(request).await.unwrap();
+        let mut blocks = Vec::new();
+        while let Some(Ok(block)) = stream.next().await {
+            blocks.push(block);
+        }
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "Let me check."));
+        assert!(matches!(&blocks[1], ContentBlock::ToolUse { name, .. } if name == "get_weather"));
     }
 }

@@ -34,8 +34,21 @@ pub enum WsMessage {
     /// Sidecar → Server: error response.
     InferenceError(InferenceError),
 
-    /// Sidecar → Server: streaming chunk.
+    /// Sidecar → Server: streaming text chunk.
     InferenceChunk { id: String, delta: String },
+
+    /// Sidecar → Server: streaming thinking/reasoning chunk.
+    InferenceThinking { id: String, delta: String },
+
+    /// Sidecar → Server: streaming tool call start.
+    InferenceToolCall(InferenceToolCall),
+
+    /// Sidecar → Server: streaming tool call argument fragment.
+    InferenceToolCallDelta {
+        id: String,
+        tool_index: usize,
+        arguments_delta: String,
+    },
 
     /// Sidecar → Server: streaming done with usage.
     InferenceDone(InferenceDone),
@@ -115,6 +128,14 @@ pub struct InferenceError {
     pub message: Option<String>,
     #[serde(default)]
     pub retryable: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InferenceToolCall {
+    pub id: String,
+    pub tool_index: usize,
+    pub tool_call_id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

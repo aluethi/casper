@@ -1,6 +1,6 @@
 use casper_wire::{
-    InferenceError, InferenceMessage, InferenceResponse, InferenceUsage, Pong, Register,
-    RegisterAckConfig, WsMessage,
+    InferenceDone, InferenceError, InferenceMessage, InferenceResponse, InferenceToolCall,
+    InferenceUsage, Pong, Register, RegisterAckConfig, WsMessage,
 };
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -108,52 +108,94 @@ pub async fn run_connection(
                 let active = Arc::clone(&active_requests);
                 let sem = Arc::clone(&semaphore);
                 let req_id = req.id.clone();
+                let wants_stream = req
+                    .params
+                    .get("stream")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
-                let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel::<String>(1);
+                let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel::<String>(64);
 
                 tokio::spawn(async move {
                     let _permit = sem.acquire().await;
                     active.fetch_add(1, Ordering::Relaxed);
                     let start = std::time::Instant::now();
 
-                    let result = dispatch_local(
-                        &client,
-                        &base_url,
-                        &req.model,
-                        &req.messages,
-                        &req.params,
-                        req.extra.as_ref(),
-                        req.timeout_ms,
-                    )
-                    .await;
-                    let duration_ms = start.elapsed().as_millis() as u64;
-                    active.fetch_sub(1, Ordering::Relaxed);
-
-                    let response_msg = match result {
-                        Ok((msg, usage, stop_reason)) => {
-                            WsMessage::InferenceResponse(InferenceResponse {
+                    if wants_stream {
+                        let result = dispatch_local_stream(
+                            &client,
+                            &base_url,
+                            &req.model,
+                            &req.messages,
+                            &req.params,
+                            req.extra.as_ref(),
+                            req.timeout_ms,
+                            &req_id,
+                            &resp_tx,
+                        )
+                        .await;
+                        let duration_ms = start.elapsed().as_millis() as u64;
+                        if let Err(e) = result {
+                            let msg = WsMessage::InferenceError(InferenceError {
                                 id: req_id,
-                                status: "ok".to_string(),
-                                message: Some(msg),
-                                usage: Some(usage),
+                                error: "dispatch_error".to_string(),
+                                message: Some(format!("{e}")),
+                                retryable: true,
+                            });
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                let _ = resp_tx.send(text).await;
+                            }
+                        } else {
+                            let done = WsMessage::InferenceDone(InferenceDone {
+                                id: req_id,
+                                usage: None,
                                 duration_ms: Some(duration_ms),
-                                stop_reason,
-                            })
+                            });
+                            if let Ok(text) = serde_json::to_string(&done) {
+                                let _ = resp_tx.send(text).await;
+                            }
                         }
-                        Err(e) => WsMessage::InferenceError(InferenceError {
-                            id: req_id,
-                            error: "dispatch_error".to_string(),
-                            message: Some(format!("{e}")),
-                            retryable: true,
-                        }),
-                    };
+                    } else {
+                        let result = dispatch_local(
+                            &client,
+                            &base_url,
+                            &req.model,
+                            &req.messages,
+                            &req.params,
+                            req.extra.as_ref(),
+                            req.timeout_ms,
+                        )
+                        .await;
+                        let duration_ms = start.elapsed().as_millis() as u64;
 
-                    if let Ok(text) = serde_json::to_string(&response_msg) {
-                        let _ = resp_tx.send(text).await;
+                        let response_msg = match result {
+                            Ok((msg, usage, stop_reason)) => {
+                                WsMessage::InferenceResponse(InferenceResponse {
+                                    id: req_id,
+                                    status: "ok".to_string(),
+                                    message: Some(msg),
+                                    usage: Some(usage),
+                                    duration_ms: Some(duration_ms),
+                                    stop_reason,
+                                })
+                            }
+                            Err(e) => WsMessage::InferenceError(InferenceError {
+                                id: req_id,
+                                error: "dispatch_error".to_string(),
+                                message: Some(format!("{e}")),
+                                retryable: true,
+                            }),
+                        };
+
+                        if let Ok(text) = serde_json::to_string(&response_msg) {
+                            let _ = resp_tx.send(text).await;
+                        }
                     }
+
+                    active.fetch_sub(1, Ordering::Relaxed);
                 });
 
-                if let Some(resp_text) = resp_rx.recv().await {
+                while let Some(resp_text) = resp_rx.recv().await {
                     ws_sink
                         .send(tungstenite::Message::Text(resp_text.into()))
                         .await?;
@@ -258,6 +300,153 @@ async fn dispatch_local(
         },
         choice["finish_reason"].as_str().map(|s| s.to_string()),
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_local_stream(
+    client: &reqwest::Client,
+    base_url: &str,
+    model: &str,
+    messages: &[serde_json::Value],
+    params: &serde_json::Value,
+    extra: Option<&serde_json::Value>,
+    timeout_ms: u64,
+    req_id: &str,
+    tx: &tokio::sync::mpsc::Sender<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+
+    let mut all_messages = Vec::new();
+    if let Some(system) = extra.and_then(|e| e.get("system")).and_then(|s| s.as_str()) {
+        all_messages.push(serde_json::json!({ "role": "system", "content": system }));
+    }
+    all_messages.extend_from_slice(messages);
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": all_messages,
+        "stream": true,
+    });
+    if let Some(v) = params.get("max_tokens").and_then(|v| v.as_i64()) {
+        body["max_tokens"] = serde_json::json!(v);
+    }
+    if let Some(v) = params.get("temperature").and_then(|v| v.as_f64()) {
+        body["temperature"] = serde_json::json!(v);
+    }
+
+    let response = client
+        .post(&url)
+        .timeout(std::time::Duration::from_millis(timeout_ms))
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("inference server returned {status}: {text}").into());
+    }
+
+    let mut byte_stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
+        std::collections::HashMap::new();
+
+    while let Some(chunk) = byte_stream.next().await {
+        let bytes = chunk?;
+        buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+        while let Some(pos) = buffer.find('\n') {
+            let line = buffer[..pos].trim().to_string();
+            buffer = buffer[pos + 1..].to_string();
+
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            let data_str = match line.strip_prefix("data: ") {
+                Some(d) => d,
+                None => continue,
+            };
+            if data_str == "[DONE]" {
+                return Ok(());
+            }
+
+            let data: serde_json::Value = match serde_json::from_str(data_str) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if let Some(choice) = data["choices"].as_array().and_then(|a| a.first()) {
+                let delta = &choice["delta"];
+
+                // Text content
+                if let Some(c) = delta["content"].as_str()
+                    && !c.is_empty()
+                {
+                    let msg = WsMessage::InferenceChunk {
+                        id: req_id.to_string(),
+                        delta: c.to_string(),
+                    };
+                    if let Ok(text) = serde_json::to_string(&msg) {
+                        let _ = tx.send(text).await;
+                    }
+                }
+
+                // Reasoning/thinking content
+                if let Some(r) = delta["reasoning_content"].as_str()
+                    && !r.is_empty()
+                {
+                    let msg = WsMessage::InferenceThinking {
+                        id: req_id.to_string(),
+                        delta: r.to_string(),
+                    };
+                    if let Ok(text) = serde_json::to_string(&msg) {
+                        let _ = tx.send(text).await;
+                    }
+                }
+
+                // Tool calls
+                if let Some(tcs) = delta["tool_calls"].as_array() {
+                    for tc in tcs {
+                        let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                        if let Some(id) = tc["id"].as_str() {
+                            let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                            tool_acc
+                                .entry(idx)
+                                .or_insert_with(|| (id.to_string(), name, String::new()));
+                            // Send tool call start
+                            let msg = WsMessage::InferenceToolCall(InferenceToolCall {
+                                id: req_id.to_string(),
+                                tool_index: idx,
+                                tool_call_id: id.to_string(),
+                                name: tool_acc[&idx].1.clone(),
+                            });
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                let _ = tx.send(text).await;
+                            }
+                        }
+                        if let Some(args) = tc["function"]["arguments"].as_str()
+                            && !args.is_empty()
+                        {
+                            if let Some(entry) = tool_acc.get_mut(&idx) {
+                                entry.2.push_str(args);
+                            }
+                            let msg = WsMessage::InferenceToolCallDelta {
+                                id: req_id.to_string(),
+                                tool_index: idx,
+                                arguments_delta: args.to_string(),
+                            };
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                let _ = tx.send(text).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn gethostname() -> String {
