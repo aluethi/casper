@@ -20,14 +20,9 @@ async fn create_connection(
 ) -> Result<Json<McpConnectionResponse>, CasperError> {
     guard.require("agents:manage")?;
     let tenant_id = guard.0.tenant_id;
-    let conn = mcp_connection_service::create(
-        &state.db,
-        &state.vault,
-        tenant_id,
-        &guard.0.actor(),
-        &body,
-    )
-    .await?;
+    let conn =
+        mcp_connection_service::create(&state.db, &state.vault, tenant_id, &guard.0.actor(), &body)
+            .await?;
     Ok(Json(conn))
 }
 

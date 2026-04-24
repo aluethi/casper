@@ -317,14 +317,23 @@ pub async fn resolve_for_agent(
     .map_err(|e| CasperError::Internal(format!("DB error: {e}")))?;
 
     let mut resolved = Vec::with_capacity(rows.len());
-    for Row { name, url, auth_type, api_key_enc, auth_provider } in rows {
+    for Row {
+        name,
+        url,
+        auth_type,
+        api_key_enc,
+        auth_provider,
+    } in rows
+    {
         let api_key = match api_key_enc {
             Some(ref enc) if !enc.is_empty() => {
                 let decrypted = vault.decrypt_value(tenant_id, enc)?;
                 Some(
                     decrypted
                         .expose_str()
-                        .map_err(|e| CasperError::Internal(format!("invalid api_key encoding: {e}")))?
+                        .map_err(|e| {
+                            CasperError::Internal(format!("invalid api_key encoding: {e}"))
+                        })?
                         .to_string(),
                 )
             }

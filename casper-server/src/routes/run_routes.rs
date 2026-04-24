@@ -18,8 +18,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::services::mcp_connection_service;
 use crate::auth::ScopeGuard;
+use crate::services::mcp_connection_service;
 use crate::services::run_service::{self, AsyncAccepted, RunRequest, TaskStatusResponse};
 
 // ── Handlers ────────────────────────────────────────────────────

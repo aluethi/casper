@@ -128,7 +128,8 @@ impl AgentEngine {
 
         // 2. Build tool dispatcher from agent's tools config (registers built-in + MCP tools)
         let dynamic_dispatcher =
-            crate::tools::build_dispatcher(&config.tools, &self.resolved_mcp, &self.http_client).await;
+            crate::tools::build_dispatcher(&config.tools, &self.resolved_mcp, &self.http_client)
+                .await;
         // Use the dynamically built dispatcher if it has tools, otherwise fall back
         // to the pre-built one (allows callers to pre-register tools if needed).
         let active_dispatcher = if !dynamic_dispatcher.is_empty() {
@@ -468,7 +469,8 @@ impl AgentEngine {
         let max_turns = (config.max_turns as usize).min(DEFAULT_MAX_TURNS);
 
         let dynamic_dispatcher =
-            crate::tools::build_dispatcher(&config.tools, &self.resolved_mcp, &self.http_client).await;
+            crate::tools::build_dispatcher(&config.tools, &self.resolved_mcp, &self.http_client)
+                .await;
         let active_dispatcher = if !dynamic_dispatcher.is_empty() {
             &dynamic_dispatcher
         } else {
