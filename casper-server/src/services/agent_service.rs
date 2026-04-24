@@ -447,6 +447,7 @@ pub async fn import_yaml(
 /// (which discovers MCP tools), then assembles the prompt with full tool docs.
 pub async fn preview_prompt(
     db: &PgPool,
+    vault: &casper_base::Vault,
     http_client: &reqwest::Client,
     tenant_id: TenantId,
     name: &str,
@@ -483,8 +484,24 @@ pub async fn preview_prompt(
         .flatten()
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Discover MCP tools so the preview includes their documentation
-    let dispatcher = casper_agent::tools::build_dispatcher(&tools, http_client).await;
+    // Resolve centralized MCP connections + discover tools for prompt preview
+    let resolved = crate::services::mcp_connection_service::resolve_for_agent_config(
+        db, vault, tenant_id, &tools,
+    )
+    .await
+    .unwrap_or_default();
+    let resolved_mcp: Vec<casper_agent::tools::ResolvedMcpConnection> = resolved
+        .into_iter()
+        .map(|c| casper_agent::tools::ResolvedMcpConnection {
+            name: c.name,
+            url: c.url,
+            api_key: c.api_key,
+            auth_type: c.auth_type,
+            auth_provider: c.auth_provider,
+        })
+        .collect();
+    let dispatcher =
+        casper_agent::tools::build_dispatcher(&tools, &resolved_mcp, http_client).await;
     let mcp_summaries = dispatcher.mcp_tool_summaries();
 
     let prompt = assemble_system_prompt(&PromptContext {

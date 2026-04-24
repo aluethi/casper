@@ -18,6 +18,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::services::mcp_connection_service;
 use crate::auth::ScopeGuard;
 use crate::services::run_service::{self, AsyncAccepted, RunRequest, TaskStatusResponse};
 
@@ -140,8 +141,29 @@ async fn run_agent_stream(
     let message = body.message.clone();
     let actor_clone = actor.clone();
 
+    // Resolve MCP connections before spawning the engine task
+    let resolved = mcp_connection_service::resolve_for_agent_by_name(
+        &state.db_owner,
+        &state.vault,
+        tenant_id,
+        &name,
+    )
+    .await
+    .unwrap_or_default();
+
+    let resolved_mcp: Vec<casper_agent::tools::ResolvedMcpConnection> = resolved
+        .into_iter()
+        .map(|c| casper_agent::tools::ResolvedMcpConnection {
+            name: c.name,
+            url: c.url,
+            api_key: c.api_key,
+            auth_type: c.auth_type,
+            auth_provider: c.auth_provider,
+        })
+        .collect();
+
     tokio::spawn(async move {
-        let engine = casper_agent::engine::AgentEngine::new(
+        let mut engine = casper_agent::engine::AgentEngine::new(
             state_clone.db_owner.clone(),
             state_clone.http_client.clone(),
             casper_agent::tools::ToolDispatcher::new(),
@@ -149,6 +171,7 @@ async fn run_agent_stream(
             Some(state_clone.audit.clone()),
             Some(state_clone.usage.clone()),
         );
+        engine.resolved_mcp = resolved_mcp;
 
         if let Err(e) = engine
             .run_stream(casper_agent::engine::RunStreamRequest {

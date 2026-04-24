@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import api from '../lib/api'
+import type { McpConnection } from '../types'
 
 interface OAuthProvider {
   id: string
@@ -48,12 +49,29 @@ const emptyForm = {
   revocation_url: '', client_id: '', client_secret: '', default_scopes: '', icon_url: '',
 }
 
+type McpAuthType = 'none' | 'bearer' | 'user_oauth' | 'mcp_oauth'
+interface McpFormState {
+  name: string
+  display_name: string
+  url: string
+  auth_type: McpAuthType
+  api_key: string
+  auth_provider: string
+}
+
+const emptyMcpForm: McpFormState = {
+  name: '', display_name: '', url: '', auth_type: 'none', api_key: '', auth_provider: '',
+}
+
+type TabKey = 'connections' | 'providers' | 'mcp_servers'
+
 export default function ConnectionsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [providers, setProviders] = useState<OAuthProvider[]>([])
   const [connections, setConnections] = useState<UserConnection[]>([])
   const [available, setAvailable] = useState<AvailableProvider[]>([])
   const [myConnections, setMyConnections] = useState<MyConnection[]>([])
+  const [mcpConnections, setMcpConnections] = useState<McpConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -81,8 +99,16 @@ export default function ConnectionsPage() {
   const [editName, setEditName] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ ...emptyForm })
 
-  // Tab: providers vs user connections
-  const [tab, setTab] = useState<'providers' | 'connections'>('connections')
+  // MCP connection create/edit
+  const [showMcpCreate, setShowMcpCreate] = useState(false)
+  const [mcpForm, setMcpForm] = useState<McpFormState>({ ...emptyMcpForm })
+  const [mcpSaving, setMcpSaving] = useState(false)
+  const [mcpEditName, setMcpEditName] = useState<string | null>(null)
+  const [mcpEditForm, setMcpEditForm] = useState<McpFormState>({ ...emptyMcpForm })
+
+  // Tab
+  const initialTab = (searchParams.get('tab') as TabKey) || 'connections'
+  const [tab, setTab] = useState<TabKey>(initialTab)
 
   // Handle ?connected= param from OAuth callback redirect
   useEffect(() => {
@@ -99,16 +125,18 @@ export default function ConnectionsPage() {
   const reload = async () => {
     setLoading(true)
     try {
-      const [provRes, connRes, availRes, myRes] = await Promise.all([
+      const [provRes, connRes, availRes, myRes, mcpRes] = await Promise.all([
         api.get('/api/v1/oauth-providers').catch(() => ({ data: [] })),
         api.get('/api/v1/connections/all').catch(() => ({ data: [] })),
         api.get('/api/v1/connections/available').catch(() => ({ data: [] })),
         api.get('/api/v1/connections').catch(() => ({ data: [] })),
+        api.get('/api/v1/mcp-connections').catch(() => ({ data: [] })),
       ])
       setProviders(provRes.data || [])
       setConnections(connRes.data || [])
       setAvailable(availRes.data || [])
       setMyConnections(myRes.data || [])
+      setMcpConnections(mcpRes.data || [])
     } catch (e: any) {
       setError(e.response?.data?.message ?? e.message)
     } finally {
@@ -171,7 +199,7 @@ export default function ConnectionsPage() {
       const body: Record<string, string> = {}
       for (const [k, v] of Object.entries(editForm)) {
         if (k === 'name') continue
-        if (k === 'client_secret' && !v.trim()) continue // don't overwrite if empty
+        if (k === 'client_secret' && !v.trim()) continue
         if (v.trim()) body[k] = v.trim()
       }
       await api.patch(`/api/v1/oauth-providers/${editName}`, body)
@@ -269,6 +297,82 @@ export default function ConnectionsPage() {
     } finally { setReregistering(false) }
   }
 
+  // ── MCP Connection CRUD ──────────────────────────────────────────
+
+  const createMcpConnection = async () => {
+    setMcpSaving(true); setError('')
+    try {
+      const body: Record<string, string> = {
+        name: mcpForm.name.trim(),
+        display_name: mcpForm.display_name.trim(),
+        url: mcpForm.url.trim(),
+        auth_type: mcpForm.auth_type,
+      }
+      if (mcpForm.auth_type === 'bearer' && mcpForm.api_key.trim()) {
+        body.api_key = mcpForm.api_key.trim()
+      }
+      if ((mcpForm.auth_type === 'user_oauth') && mcpForm.auth_provider.trim()) {
+        body.auth_provider = mcpForm.auth_provider.trim()
+      }
+      await api.post('/api/v1/mcp-connections', body)
+      setMcpForm({ ...emptyMcpForm })
+      setShowMcpCreate(false)
+      setSuccess('MCP connection created.')
+      await reload()
+    } catch (e: any) {
+      setError(e.response?.data?.message ?? e.message)
+    } finally { setMcpSaving(false) }
+  }
+
+  const startMcpEdit = (c: McpConnection) => {
+    setMcpEditName(c.name)
+    setMcpEditForm({
+      name: c.name,
+      display_name: c.display_name,
+      url: c.url,
+      auth_type: c.auth_type,
+      api_key: '',
+      auth_provider: c.auth_provider || '',
+    })
+  }
+
+  const saveMcpEdit = async () => {
+    if (!mcpEditName) return
+    setMcpSaving(true); setError('')
+    try {
+      const body: Record<string, string | undefined> = {}
+      if (mcpEditForm.display_name.trim()) body.display_name = mcpEditForm.display_name.trim()
+      if (mcpEditForm.url.trim()) body.url = mcpEditForm.url.trim()
+      body.auth_type = mcpEditForm.auth_type
+      if (mcpEditForm.api_key.trim()) body.api_key = mcpEditForm.api_key.trim()
+      if (mcpEditForm.auth_provider.trim()) body.auth_provider = mcpEditForm.auth_provider.trim()
+      await api.patch(`/api/v1/mcp-connections/${mcpEditName}`, body)
+      setMcpEditName(null)
+      await reload()
+    } catch (e: any) {
+      setError(e.response?.data?.message ?? e.message)
+    } finally { setMcpSaving(false) }
+  }
+
+  const toggleMcpActive = async (name: string, active: boolean) => {
+    try {
+      await api.patch(`/api/v1/mcp-connections/${name}`, { is_active: active })
+      await reload()
+    } catch (e: any) {
+      setError(e.response?.data?.message ?? e.message)
+    }
+  }
+
+  const deleteMcpConnection = async (name: string) => {
+    if (!confirm(`Deactivate MCP connection "${name}"? Agents using it will lose access to its tools.`)) return
+    try {
+      await api.delete(`/api/v1/mcp-connections/${name}`)
+      await reload()
+    } catch (e: any) {
+      setError(e.response?.data?.message ?? e.message)
+    }
+  }
+
   if (loading) return <p className="text-slate-500">Loading...</p>
 
   return (
@@ -287,9 +391,15 @@ export default function ConnectionsPage() {
             </button>
           </div>
         )}
+        {tab === 'mcp_servers' && (
+          <button onClick={() => setShowMcpCreate(!showMcpCreate)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-500 transition-colors">
+            + Add MCP Connection
+          </button>
+        )}
       </div>
       <p className="text-sm text-slate-500 mb-4">
-        Manage OAuth providers and user connections for MCP server authentication.
+        Manage MCP server connections, OAuth providers, and user connections.
       </p>
 
       {success && (
@@ -307,8 +417,8 @@ export default function ConnectionsPage() {
       {/* Tabs */}
       <div className="border-b border-slate-200 mb-6">
         <div className="flex gap-6">
-          {([['connections', 'My Connections'], ['providers', 'OAuth Providers']] as const).map(([t, label]) => (
-            <button key={t} onClick={() => setTab(t as 'providers' | 'connections')}
+          {([['connections', 'My Connections'], ['mcp_servers', 'MCP Servers'], ['providers', 'OAuth Providers']] as const).map(([t, label]) => (
+            <button key={t} onClick={() => setTab(t as TabKey)}
               className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
                 tab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}>
@@ -317,6 +427,180 @@ export default function ConnectionsPage() {
           ))}
         </div>
       </div>
+
+      {/* MCP Servers tab */}
+      {tab === 'mcp_servers' && (
+        <>
+          {/* Create form */}
+          {showMcpCreate && (
+            <div className="bg-white rounded-2xl ring-1 ring-blue-200 shadow-sm p-6 mb-6">
+              <h3 className="text-sm font-semibold text-slate-900 mb-3">New MCP Connection</h3>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <Field label="Name (slug)" value={mcpForm.name}
+                  onChange={v => setMcpForm({ ...mcpForm, name: v.replace(/[^a-z0-9_-]/gi, '_').toLowerCase() })}
+                  placeholder="e.g. jira, github, asana" />
+                <Field label="Display Name" value={mcpForm.display_name}
+                  onChange={v => setMcpForm({ ...mcpForm, display_name: v })}
+                  placeholder="Jira Cloud" />
+                <Field label="MCP Server URL" value={mcpForm.url}
+                  onChange={v => setMcpForm({ ...mcpForm, url: v })}
+                  placeholder="https://mcp-server.example.com/mcp" className="col-span-2" />
+                <div>
+                  <label className="block text-xs text-slate-500 mb-0.5">Authentication</label>
+                  <select value={mcpForm.auth_type}
+                    onChange={e => setMcpForm({ ...mcpForm, auth_type: e.target.value as McpAuthType, api_key: '', auth_provider: '' })}
+                    className="w-full rounded-lg ring-1 ring-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                    <option value="none">None</option>
+                    <option value="bearer">Bearer token</option>
+                    <option value="user_oauth">User OAuth (manual provider)</option>
+                    <option value="mcp_oauth">MCP OAuth 2.1 (auto-discover)</option>
+                  </select>
+                </div>
+                {mcpForm.auth_type === 'bearer' && (
+                  <Field label="API Key / Bearer Token" value={mcpForm.api_key}
+                    onChange={v => setMcpForm({ ...mcpForm, api_key: v })}
+                    type="password" placeholder="sk-..." />
+                )}
+                {mcpForm.auth_type === 'user_oauth' && (
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-0.5">OAuth Provider</label>
+                    <select value={mcpForm.auth_provider}
+                      onChange={e => setMcpForm({ ...mcpForm, auth_provider: e.target.value })}
+                      className="w-full rounded-lg ring-1 ring-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                      <option value="">Select provider...</option>
+                      {providers.filter(p => p.is_active).map(p => (
+                        <option key={p.name} value={p.name}>{p.display_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+              {mcpForm.auth_type === 'user_oauth' && (
+                <p className="text-[11px] text-amber-600 mb-3">
+                  Each user must connect their account in the "My Connections" tab before this server's tools can authenticate on their behalf.
+                </p>
+              )}
+              <div className="flex gap-2">
+                <button onClick={createMcpConnection}
+                  disabled={mcpSaving || !mcpForm.name.trim() || !mcpForm.url.trim() || !mcpForm.display_name.trim()}
+                  className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-sm font-semibold hover:bg-blue-500 disabled:opacity-40 transition-colors">
+                  {mcpSaving ? 'Creating...' : 'Create'}
+                </button>
+                <button onClick={() => { setShowMcpCreate(false); setMcpForm({ ...emptyMcpForm }) }}
+                  className="rounded-full text-sm font-medium text-slate-600 ring-1 ring-slate-300 hover:bg-slate-50 px-4 py-1.5 transition-colors">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* MCP connections table */}
+          <div className="bg-white rounded-2xl ring-1 ring-slate-900/5 shadow-sm overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="text-left px-4 py-3 font-medium">Connection</th>
+                  <th className="text-left px-4 py-3 font-medium">URL</th>
+                  <th className="text-left px-4 py-3 font-medium">Auth</th>
+                  <th className="text-left px-4 py-3 font-medium">Status</th>
+                  <th className="text-right px-4 py-3 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {mcpConnections.length === 0 && (
+                  <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">No MCP connections configured. Click "+ Add MCP Connection" to get started.</td></tr>
+                )}
+                {mcpConnections.map(c => {
+                  const isEditing = mcpEditName === c.name
+                  return isEditing ? (
+                    <tr key={c.name} className="bg-blue-50/50">
+                      <td colSpan={5} className="px-4 py-4">
+                        <h4 className="text-xs font-semibold text-blue-800 mb-2">Editing: {c.name}</h4>
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          <Field label="Display Name" value={mcpEditForm.display_name}
+                            onChange={v => setMcpEditForm({ ...mcpEditForm, display_name: v })} />
+                          <Field label="URL" value={mcpEditForm.url}
+                            onChange={v => setMcpEditForm({ ...mcpEditForm, url: v })} />
+                          <div>
+                            <label className="block text-xs text-slate-500 mb-0.5">Authentication</label>
+                            <select value={mcpEditForm.auth_type}
+                              onChange={e => setMcpEditForm({ ...mcpEditForm, auth_type: e.target.value as McpAuthType })}
+                              className="w-full rounded-lg ring-1 ring-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                              <option value="none">None</option>
+                              <option value="bearer">Bearer token</option>
+                              <option value="user_oauth">User OAuth</option>
+                              <option value="mcp_oauth">MCP OAuth 2.1</option>
+                            </select>
+                          </div>
+                          {mcpEditForm.auth_type === 'bearer' && (
+                            <Field label="API Key (leave empty to keep)" value={mcpEditForm.api_key}
+                              onChange={v => setMcpEditForm({ ...mcpEditForm, api_key: v })} type="password" />
+                          )}
+                          {mcpEditForm.auth_type === 'user_oauth' && (
+                            <div>
+                              <label className="block text-xs text-slate-500 mb-0.5">OAuth Provider</label>
+                              <select value={mcpEditForm.auth_provider}
+                                onChange={e => setMcpEditForm({ ...mcpEditForm, auth_provider: e.target.value })}
+                                className="w-full rounded-lg ring-1 ring-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                                <option value="">Select provider...</option>
+                                {providers.filter(p => p.is_active).map(p => (
+                                  <option key={p.name} value={p.name}>{p.display_name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={saveMcpEdit} disabled={mcpSaving}
+                            className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-sm font-semibold hover:bg-blue-500 disabled:opacity-40 transition-colors">
+                            {mcpSaving ? 'Saving...' : 'Save'}
+                          </button>
+                          <button onClick={() => setMcpEditName(null)}
+                            className="rounded-full text-sm font-medium text-slate-600 ring-1 ring-slate-300 hover:bg-slate-50 px-4 py-1.5 transition-colors">
+                            Cancel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={c.name} className={`hover:bg-slate-50 ${!c.is_active ? 'opacity-50' : ''}`}>
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-slate-900">{c.display_name}</div>
+                        <div className="text-xs text-slate-400 font-mono">{c.name}</div>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-slate-500 max-w-64 truncate font-mono">{c.url}</td>
+                      <td className="px-4 py-3 text-xs text-slate-500">
+                        {c.auth_type === 'none' && 'None'}
+                        {c.auth_type === 'bearer' && 'Bearer token'}
+                        {c.auth_type === 'user_oauth' && `OAuth (${c.auth_provider || '?'})`}
+                        {c.auth_type === 'mcp_oauth' && 'MCP OAuth 2.1'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${
+                          c.is_active
+                            ? 'bg-green-50 text-green-700 ring-green-600/20'
+                            : 'bg-slate-50 text-slate-500 ring-slate-300'
+                        }`}>
+                          {c.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right space-x-2">
+                        <button onClick={() => startMcpEdit(c)} className="text-xs text-blue-600 hover:text-blue-800">Edit</button>
+                        {c.is_active ? (
+                          <button onClick={() => toggleMcpActive(c.name, false)} className="text-xs text-amber-600 hover:text-amber-800">Deactivate</button>
+                        ) : (
+                          <button onClick={() => toggleMcpActive(c.name, true)} className="text-xs text-green-600 hover:text-green-800">Activate</button>
+                        )}
+                        <button onClick={() => deleteMcpConnection(c.name)} className="text-xs text-red-600 hover:text-red-800">Delete</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {/* Providers tab */}
       {tab === 'providers' && (

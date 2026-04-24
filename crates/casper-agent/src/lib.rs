@@ -12,4 +12,4 @@ pub use engine::AgentEngine;
 pub use mcp::{McpClient, McpError, McpToolDef};
 pub use reaper::{ReaperConfig, start_reaper};
 pub use stream_event::StreamEvent;
-pub use tools::{Tool, ToolContext, ToolDispatcher, ToolResult};
+pub use tools::{ResolvedMcpConnection, Tool, ToolContext, ToolDispatcher, ToolResult};

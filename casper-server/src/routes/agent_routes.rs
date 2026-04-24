@@ -113,7 +113,7 @@ async fn preview_prompt(
 ) -> Result<String, CasperError> {
     guard.require("agents:manage")?;
     let tenant_id = casper_base::TenantId(guard.0.tenant_id.0);
-    agent_service::preview_prompt(&state.db_owner, &state.http_client, tenant_id, &name).await
+    agent_service::preview_prompt(&state.db_owner, &state.vault, &state.http_client, tenant_id, &name).await
 }
 
 /// POST /api/v1/agents/import -- Import agent from YAML body.

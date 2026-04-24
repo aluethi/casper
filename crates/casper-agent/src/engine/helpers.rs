@@ -218,6 +218,7 @@ impl AgentEngine {
             llm_provider: self.llm_provider.clone(),
             audit_writer: self.audit_writer.clone(),
             usage_recorder: self.usage_recorder.clone(),
+            resolved_mcp: self.resolved_mcp.clone(),
             delegation_depth: self.delegation_depth + 1,
         };
 

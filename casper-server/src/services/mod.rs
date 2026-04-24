@@ -8,6 +8,7 @@ pub mod feedback_service;
 pub mod inference_service;
 pub mod knowledge_service;
 pub mod llm_caller;
+pub mod mcp_connection_service;
 pub mod memory_service;
 pub mod model_service;
 pub mod oauth_provider_service;

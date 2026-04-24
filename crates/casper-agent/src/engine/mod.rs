@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::actor::{AgentResponse, AgentUsage};
-use crate::tools::{ToolContext, ToolDispatcher};
+use crate::tools::{ResolvedMcpConnection, ToolContext, ToolDispatcher};
 
 pub struct RunStreamRequest {
     pub tenant_id: Uuid,
@@ -75,6 +75,7 @@ pub struct AgentEngine {
     pub llm_provider: Arc<dyn LlmProvider>,
     pub audit_writer: Option<AuditWriter>,
     pub usage_recorder: Option<UsageRecorder>,
+    pub resolved_mcp: Vec<ResolvedMcpConnection>,
     delegation_depth: u32,
 }
 
@@ -94,6 +95,7 @@ impl AgentEngine {
             llm_provider,
             audit_writer,
             usage_recorder,
+            resolved_mcp: Vec::new(),
             delegation_depth: 0,
         }
     }
@@ -126,7 +128,7 @@ impl AgentEngine {
 
         // 2. Build tool dispatcher from agent's tools config (registers built-in + MCP tools)
         let dynamic_dispatcher =
-            crate::tools::build_dispatcher(&config.tools, &self.http_client).await;
+            crate::tools::build_dispatcher(&config.tools, &self.resolved_mcp, &self.http_client).await;
         // Use the dynamically built dispatcher if it has tools, otherwise fall back
         // to the pre-built one (allows callers to pre-register tools if needed).
         let active_dispatcher = if !dynamic_dispatcher.is_empty() {
@@ -466,7 +468,7 @@ impl AgentEngine {
         let max_turns = (config.max_turns as usize).min(DEFAULT_MAX_TURNS);
 
         let dynamic_dispatcher =
-            crate::tools::build_dispatcher(&config.tools, &self.http_client).await;
+            crate::tools::build_dispatcher(&config.tools, &self.resolved_mcp, &self.http_client).await;
         let active_dispatcher = if !dynamic_dispatcher.is_empty() {
             &dynamic_dispatcher
         } else {

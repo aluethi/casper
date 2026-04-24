@@ -4,7 +4,7 @@ import api from '../lib/api'
 import { fetchSSE } from '../lib/sse'
 import type { Agent, Deployment, AvailableModel } from '../types'
 import PromptStackEditor, { type PromptBlock, type AvailableAgent } from './components/PromptStackEditor'
-import ToolsEditor, { type McpServer } from './components/ToolsEditor'
+import ToolsEditor from './components/ToolsEditor'
 import { ChatPanel } from '../components/chat'
 import type { ChatMessage, ToolCallBlock } from '../components/chat'
 
@@ -172,7 +172,7 @@ export default function AgentBuilderPage() {
   const [modelDeployment, setModelDeployment] = useState('')
   const [blocks, setBlocks] = useState<PromptBlock[]>([])
   const [builtinTools, setBuiltinTools] = useState<Record<string, Record<string, unknown>>>({})
-  const [mcpServers, setMcpServers] = useState<McpServer[]>([])
+  const [mcpConnectionNames, setMcpConnectionNames] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
 
   // Available agents (for delegates block)
@@ -226,7 +226,8 @@ export default function AgentBuilderPage() {
         for (const t of toolsData) { bt[t.name] = { ...t }; delete bt[t.name].name }
         setBuiltinTools(bt)
         // Parse MCP servers
-        setMcpServers((a.tools?.mcp || []) as McpServer[])
+        const mcpRaw = a.tools?.mcp || []
+        setMcpConnectionNames(mcpRaw.map((m: string | { name: string }) => typeof m === 'string' ? m : m.name))
       })
       .catch(e => setError(e.response?.data?.message ?? e.message))
       .finally(() => setLoading(false))
@@ -259,7 +260,7 @@ export default function AgentBuilderPage() {
       await api.patch(`/api/v1/agents/${name}`, {
         display_name: displayName, description, model_deployment: modelDeployment,
         prompt_stack: blocks,
-        tools: { builtin, mcp: mcpServers },
+        tools: { builtin, mcp: mcpConnectionNames },
       })
       // Reload
       const r = await api.get(`/api/v1/agents/${name}`)
@@ -483,7 +484,7 @@ export default function AgentBuilderPage() {
             <PromptStackEditor blocks={blocks} setBlocks={setBlocks} totalTokens={totalTokens} availableAgents={availableAgents} />
 
             {/* Tools */}
-            <ToolsEditor builtinTools={builtinTools} setBuiltinTools={setBuiltinTools} mcpServers={mcpServers} setMcpServers={setMcpServers} />
+            <ToolsEditor builtinTools={builtinTools} setBuiltinTools={setBuiltinTools} mcpConnectionNames={mcpConnectionNames} setMcpConnectionNames={setMcpConnectionNames} />
 
             <button onClick={saveConfig} disabled={saving}
               className="bg-blue-600 text-white px-6 py-2.5 rounded-full text-sm font-semibold hover:bg-blue-500 active:bg-blue-800 transition-colors disabled:opacity-50">
@@ -516,7 +517,7 @@ export default function AgentBuilderPage() {
                 )}
               </div>
               <div className="mt-4 text-xs text-slate-400">
-                {blocks.length} blocks | {Object.keys(builtinTools).length} tools | {mcpServers.length} MCP {mcpServers.length === 1 ? 'server' : 'servers'}
+                {blocks.length} blocks | {Object.keys(builtinTools).length} tools | {mcpConnectionNames.length} MCP {mcpConnectionNames.length === 1 ? 'server' : 'servers'}
               </div>
             </div>
           </div>

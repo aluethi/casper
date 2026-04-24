@@ -207,17 +207,27 @@ impl Default for ToolDispatcher {
     }
 }
 
+// ── Resolved MCP connection (passed from server layer) ─────────
+
+/// A fully resolved MCP connection with decrypted secrets.
+/// Created by the server layer from the `mcp_connections` table.
+#[derive(Clone)]
+pub struct ResolvedMcpConnection {
+    pub name: String,
+    pub url: String,
+    pub api_key: Option<String>,
+    pub auth_type: String,
+    pub auth_provider: Option<String>,
+}
+
 // ── Dispatcher builder ──────────────────────────────────────────
 
-/// Build a [`ToolDispatcher`] from an agent's `tools` JSON config.
+/// Build a [`ToolDispatcher`] from an agent's `tools` JSON config and
+/// pre-resolved MCP connections from the database.
 ///
-/// The config shape is:
-/// ```json
-/// {
-///   "builtin": [{ "name": "delegate", ... }, { "name": "web_search", ... }],
-///   "mcp": [{ "name": "jira", "url": "https://...", "api_key": "..." }]
-/// }
-/// ```
+/// The `tools_config.mcp` array may contain:
+/// - **strings** (new format): connection names resolved via `resolved_mcp`
+/// - **objects** (legacy format): inline MCP server configs with `name`, `url`, `auth`
 ///
 /// Built-in tools are registered by name. MCP tools are discovered from each
 /// configured server and registered with a `mcp__{server}__{tool}` prefix.
@@ -225,6 +235,7 @@ impl Default for ToolDispatcher {
 /// agent can still start.
 pub async fn build_dispatcher(
     tools_config: &serde_json::Value,
+    resolved_mcp: &[ResolvedMcpConnection],
     http_client: &reqwest::Client,
 ) -> ToolDispatcher {
     let mut dispatcher = ToolDispatcher::new();
@@ -255,9 +266,40 @@ pub async fn build_dispatcher(
         }
     }
 
-    // ── MCP tools ──
+    // ── MCP tools (resolved from mcp_connections table) ──
+    for conn in resolved_mcp {
+        let mcp_auth = match conn.auth_type.as_str() {
+            "mcp_oauth" => mcp::McpAuth::McpOAuth,
+            "user_oauth" => mcp::McpAuth::UserOAuth {
+                provider: conn
+                    .auth_provider
+                    .clone()
+                    .unwrap_or_else(|| conn.name.clone()),
+            },
+            "none" => mcp::McpAuth::None,
+            _ => mcp::McpAuth::Bearer,
+        };
+
+        let client = Arc::new(crate::McpClient::new(
+            &conn.url,
+            conn.api_key.clone(),
+            http_client.clone(),
+        ));
+
+        let tools = mcp::discover_and_wrap(&conn.name, client, mcp_auth).await;
+        for tool in tools {
+            dispatcher.register(Arc::new(tool));
+        }
+    }
+
+    // ── MCP tools (legacy inline configs for backward compatibility) ──
     if let Some(servers) = tools_config.get("mcp").and_then(|v| v.as_array()) {
         for server_cfg in servers {
+            // Skip string entries — those are references handled via resolved_mcp above
+            if server_cfg.is_string() {
+                continue;
+            }
+
             let server_name = server_cfg
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -272,12 +314,11 @@ pub async fn build_dispatcher(
                     continue;
                 }
             };
-            // Parse auth config: { type: "bearer"|"user_oauth"|"none", ... }
             let auth_cfg = server_cfg.get("auth");
             let auth_type = auth_cfg
                 .and_then(|a| a.get("type"))
                 .and_then(|v| v.as_str())
-                .unwrap_or("bearer"); // default to bearer for backward compat
+                .unwrap_or("bearer");
 
             let (api_key, mcp_auth) = match auth_type {
                 "mcp_oauth" => (None, mcp::McpAuth::McpOAuth),
@@ -291,7 +332,6 @@ pub async fn build_dispatcher(
                 }
                 "none" => (None, mcp::McpAuth::None),
                 _ => {
-                    // Bearer: read api_key from config (backward compat) or auth.token_ref
                     let key = server_cfg
                         .get("api_key")
                         .and_then(|v| v.as_str())

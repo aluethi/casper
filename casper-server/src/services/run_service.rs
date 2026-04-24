@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::helpers::to_rfc3339;
+use crate::services::mcp_connection_service;
 
 fn serialize_dt<S: serde::Serializer>(dt: &OffsetDateTime, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&to_rfc3339(*dt))
@@ -192,7 +193,16 @@ pub async fn execute_run(
     let correlation_id = Uuid::now_v7();
 
     let (assistant_text, usage, agent_steps) = {
-        let engine = casper_agent::engine::AgentEngine::new(
+        let resolved = mcp_connection_service::resolve_for_agent_by_name(
+            &state.db_owner,
+            &state.vault,
+            TenantId(tenant_id),
+            agent_name,
+        )
+        .await
+        .unwrap_or_default();
+
+        let mut engine = casper_agent::engine::AgentEngine::new(
             state.db_owner.clone(),
             state.http_client.clone(),
             casper_agent::tools::ToolDispatcher::new(),
@@ -200,6 +210,16 @@ pub async fn execute_run(
             Some(state.audit.clone()),
             Some(state.usage.clone()),
         );
+        engine.resolved_mcp = resolved
+            .into_iter()
+            .map(|c| casper_agent::tools::ResolvedMcpConnection {
+                name: c.name,
+                url: c.url,
+                api_key: c.api_key,
+                auth_type: c.auth_type,
+                auth_provider: c.auth_provider,
+            })
+            .collect();
 
         match engine
             .run(

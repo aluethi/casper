@@ -385,6 +385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::agent_backend_routes::agent_backend_router())
         .merge(routes::oauth_provider_routes::oauth_provider_router())
         .merge(routes::connection_routes::connection_router())
+        .merge(routes::mcp_connection_routes::mcp_connection_router())
         .layer(middleware::from_fn_with_state(
             auth_state.clone(),
             auth::auth_middleware,

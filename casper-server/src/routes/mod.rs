@@ -11,6 +11,7 @@ pub mod domain_routes;
 pub mod feedback_routes;
 pub mod inference_routes;
 pub mod knowledge_routes;
+pub mod mcp_connection_routes;
 pub mod memory_routes;
 pub mod model_routes;
 pub mod oauth_provider_routes;

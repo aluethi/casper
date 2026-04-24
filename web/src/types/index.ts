@@ -19,7 +19,7 @@ export interface Agent {
   description: string | null
   model_deployment: string
   prompt_stack: Record<string, unknown>[]
-  tools: { builtin?: { name: string; [key: string]: unknown }[]; mcp?: McpServerConfig[] }
+  tools: { builtin?: { name: string; [key: string]: unknown }[]; mcp?: (string | McpServerConfig)[] }
   config: Record<string, unknown>
   version: number
   tenant_id: string
@@ -33,6 +33,19 @@ export interface McpServerConfig {
   name: string
   url: string
   api_key?: string
+}
+
+export interface McpConnection {
+  id: string
+  name: string
+  display_name: string
+  url: string
+  auth_type: 'none' | 'bearer' | 'user_oauth' | 'mcp_oauth'
+  auth_provider?: string
+  is_active: boolean
+  created_by: string
+  created_at: string
+  updated_at: string
 }
 
 export interface Deployment {
