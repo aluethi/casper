@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use casper_base::CasperError;
+use futures::{Stream, StreamExt};
 use serde_json::json;
 
 use crate::provider::LlmProvider;
@@ -13,8 +14,16 @@ use crate::types::{
 
 type TransportFn = dyn Fn(
         serde_json::Value,
-    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, CasperError>> + Send>>
-    + Send
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Pin<Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>>,
+                        CasperError,
+                    >,
+                > + Send,
+        >,
+    > + Send
     + Sync;
 
 pub struct LocalLlmProvider {
@@ -25,7 +34,13 @@ impl LocalLlmProvider {
     pub fn new<F, Fut>(transport: F) -> Self
     where
         F: Fn(serde_json::Value) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<serde_json::Value, CasperError>> + Send + 'static,
+        Fut: Future<
+                Output = Result<
+                    Pin<Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>>,
+                    CasperError,
+                >,
+            > + Send
+            + 'static,
     {
         Self {
             transport: Arc::new(move |req| Box::pin(transport(req))),
@@ -45,26 +60,95 @@ impl LlmProvider for LocalLlmProvider {
     ) -> Result<CompletionResponse, CasperError> {
         let start = Instant::now();
         let wire_request = build_request(&request);
-        let wire_response = (self.transport)(wire_request).await?;
-        parse_response(&wire_response, &request, start.elapsed())
+        let mut stream = (self.transport)(wire_request).await?;
+
+        let mut content = Vec::new();
+        let mut reasoning = Vec::new();
+        let mut usage = TokenUsage::default();
+        let mut stop_reason = None;
+        let mut model = request.model.clone().unwrap_or_else(|| "local".to_string());
+
+        while let Some(item) = stream.next().await {
+            let chunk = item?;
+            // Streaming delta
+            if let Some(delta) = chunk["delta"].as_str() {
+                if !delta.is_empty() {
+                    content.push(ContentBlock::Text {
+                        text: delta.to_string(),
+                    });
+                }
+                continue;
+            }
+            // Full response (non-streaming fallback)
+            if let Some(msg) = chunk.get("message") {
+                parse_message_into(msg, &mut content, &mut reasoning);
+                if let Some(sr) = chunk.get("stop_reason").and_then(|v| v.as_str()) {
+                    stop_reason = Some(parse_stop_reason(sr));
+                }
+            }
+            // Done / usage
+            if let Some(u) = chunk.get("usage") {
+                usage.input_tokens = u["input_tokens"].as_u64().unwrap_or(0) as u32;
+                usage.output_tokens = u["output_tokens"].as_u64().unwrap_or(0) as u32;
+            }
+            if let Some(m) = chunk["model"].as_str() {
+                model = m.to_string();
+            }
+        }
+
+        let has_tool_use = content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+
+        Ok(CompletionResponse {
+            content,
+            reasoning,
+            stop_reason: stop_reason.unwrap_or(if has_tool_use {
+                StopReason::ToolUse
+            } else {
+                StopReason::EndTurn
+            }),
+            usage,
+            model,
+            latency: start.elapsed(),
+        })
     }
 
     async fn complete_stream(
         &self,
         request: CompletionRequest,
-    ) -> Result<
-        Pin<Box<dyn futures::Stream<Item = Result<ContentBlock, CasperError>> + Send>>,
-        CasperError,
-    > {
-        let response = self.complete(request).await?;
-        let mut blocks: Vec<Result<ContentBlock, CasperError>> = Vec::new();
-        for block in response.reasoning {
-            blocks.push(Ok(block));
-        }
-        for block in response.content {
-            blocks.push(Ok(block));
-        }
-        Ok(Box::pin(futures::stream::iter(blocks)))
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<ContentBlock, CasperError>> + Send>>, CasperError>
+    {
+        let wire_request = build_request(&request);
+        let json_stream = (self.transport)(wire_request).await?;
+
+        let block_stream = json_stream.filter_map(|item| async move {
+            match item {
+                Err(e) => Some(Err(e)),
+                Ok(chunk) => {
+                    // Streaming text delta
+                    if let Some(delta) = chunk["delta"].as_str() {
+                        if !delta.is_empty() {
+                            return Some(Ok(ContentBlock::Text {
+                                text: delta.to_string(),
+                            }));
+                        }
+                        return None;
+                    }
+                    // Full response fallback — emit each block
+                    if let Some(msg) = chunk.get("message") {
+                        let mut blocks = Vec::new();
+                        parse_message_into(msg, &mut blocks, &mut Vec::new());
+                        if let Some(first) = blocks.into_iter().next() {
+                            return Some(Ok(first));
+                        }
+                    }
+                    None
+                }
+            }
+        });
+
+        Ok(Box::pin(block_stream))
     }
 }
 
@@ -107,42 +191,14 @@ fn build_request(request: &CompletionRequest) -> serde_json::Value {
     body
 }
 
-// ── Response conversion ───────────────────────────────────────────
+// ── Response parsing helpers ──────────────────────────────────────
 
-fn parse_response(
-    resp: &serde_json::Value,
-    request: &CompletionRequest,
-    latency: std::time::Duration,
-) -> Result<CompletionResponse, CasperError> {
-    let message = resp.get("message").or_else(|| {
-        resp.get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
-    });
-
-    let mut content = Vec::new();
-
-    if let Some(msg) = message {
-        if let Some(text) = msg["content"].as_str()
-            && !text.is_empty()
-        {
-            content.push(ContentBlock::Text {
-                text: text.to_string(),
-            });
-        }
-
-        if let Some(tool_calls) = msg["tool_calls"].as_array() {
-            for tc in tool_calls {
-                let id = tc["id"].as_str().unwrap_or("").to_string();
-                let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-                let input: serde_json::Value = tc["function"]["arguments"]
-                    .as_str()
-                    .and_then(|s| serde_json::from_str(s).ok())
-                    .unwrap_or(json!({}));
-                content.push(ContentBlock::ToolUse { id, name, input });
-            }
-        }
-    } else if let Some(text) = resp["content"].as_str()
+fn parse_message_into(
+    msg: &serde_json::Value,
+    content: &mut Vec<ContentBlock>,
+    _reasoning: &mut Vec<ContentBlock>,
+) {
+    if let Some(text) = msg["content"].as_str()
         && !text.is_empty()
     {
         content.push(ContentBlock::Text {
@@ -150,48 +206,26 @@ fn parse_response(
         });
     }
 
-    let has_tool_use = content
-        .iter()
-        .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
-
-    let stop_reason = if has_tool_use {
-        StopReason::ToolUse
-    } else {
-        match resp.get("stop_reason").and_then(|v| v.as_str()) {
-            Some("length") => StopReason::MaxTokens,
-            Some("stop_sequence") => StopReason::StopSequence,
-            _ => StopReason::EndTurn,
+    if let Some(tool_calls) = msg["tool_calls"].as_array() {
+        for tc in tool_calls {
+            let id = tc["id"].as_str().unwrap_or("").to_string();
+            let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+            let input: serde_json::Value = tc["function"]["arguments"]
+                .as_str()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(json!({}));
+            content.push(ContentBlock::ToolUse { id, name, input });
         }
-    };
+    }
+}
 
-    let usage = resp.get("usage");
-    let input_tokens = usage
-        .and_then(|u| u["input_tokens"].as_u64().or(u["prompt_tokens"].as_u64()))
-        .unwrap_or(0) as u32;
-    let output_tokens = usage
-        .and_then(|u| {
-            u["output_tokens"]
-                .as_u64()
-                .or(u["completion_tokens"].as_u64())
-        })
-        .unwrap_or(0) as u32;
-
-    let model = resp["model"]
-        .as_str()
-        .unwrap_or(request.model.as_deref().unwrap_or("local"))
-        .to_string();
-
-    Ok(CompletionResponse {
-        content,
-        reasoning: Vec::new(),
-        stop_reason,
-        usage: TokenUsage {
-            input_tokens,
-            output_tokens,
-        },
-        model,
-        latency,
-    })
+fn parse_stop_reason(s: &str) -> StopReason {
+    match s {
+        "length" => StopReason::MaxTokens,
+        "stop_sequence" => StopReason::StopSequence,
+        "tool_calls" | "tool_use" => StopReason::ToolUse,
+        _ => StopReason::EndTurn,
+    }
 }
 
 #[cfg(test)]
@@ -221,75 +255,18 @@ mod tests {
         assert_eq!(wire["max_tokens"], 1024);
     }
 
-    #[test]
-    fn parse_response_simple_text() {
-        let resp = json!({
-            "message": {
-                "role": "assistant",
-                "content": "Hello back!"
-            },
-            "usage": {
-                "input_tokens": 10,
-                "output_tokens": 5
-            }
-        });
-        let req = CompletionRequest {
-            messages: vec![],
-            tools: vec![],
-            max_tokens: 1024,
-            temperature: 0.7,
-            model: Some("test".to_string()),
-            stop_sequences: vec![],
-            extra: None,
-        };
-        let result = parse_response(&resp, &req, std::time::Duration::from_millis(50)).unwrap();
-        assert_eq!(result.content.len(), 1);
-        assert!(matches!(&result.content[0], ContentBlock::Text { text } if text == "Hello back!"));
-        assert_eq!(result.stop_reason, StopReason::EndTurn);
-        assert_eq!(result.usage.input_tokens, 10);
-        assert_eq!(result.usage.output_tokens, 5);
-    }
-
-    #[test]
-    fn parse_response_with_tool_calls() {
-        let resp = json!({
-            "message": {
-                "role": "assistant",
-                "content": null,
-                "tool_calls": [{
-                    "id": "call_1",
-                    "function": {
-                        "name": "search",
-                        "arguments": "{\"query\":\"rust\"}"
-                    }
-                }]
-            },
-            "usage": { "input_tokens": 20, "output_tokens": 10 }
-        });
-        let req = CompletionRequest {
-            messages: vec![],
-            tools: vec![],
-            max_tokens: 1024,
-            temperature: 0.7,
-            model: None,
-            stop_sequences: vec![],
-            extra: None,
-        };
-        let result = parse_response(&resp, &req, std::time::Duration::ZERO).unwrap();
-        assert_eq!(result.stop_reason, StopReason::ToolUse);
-        assert!(matches!(
-            &result.content[0],
-            ContentBlock::ToolUse { name, .. } if name == "search"
-        ));
-    }
-
     #[tokio::test]
-    async fn local_provider_roundtrip() {
+    async fn local_provider_streaming() {
         let provider = LocalLlmProvider::new(|_req| async {
-            Ok(json!({
-                "message": { "role": "assistant", "content": "I'm local!" },
-                "usage": { "input_tokens": 5, "output_tokens": 3 }
-            }))
+            let chunks = vec![
+                Ok(json!({ "delta": "Hello " })),
+                Ok(json!({ "delta": "world!" })),
+                Ok(json!({ "done": true, "usage": { "input_tokens": 5, "output_tokens": 2 } })),
+            ];
+            Ok(Box::pin(futures::stream::iter(chunks))
+                as Pin<
+                    Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>,
+                >)
         });
 
         let request = CompletionRequest {
@@ -307,9 +284,49 @@ mod tests {
             extra: None,
         };
 
+        // Test streaming
+        let mut stream = provider.complete_stream(request.clone()).await.unwrap();
+        let mut texts = Vec::new();
+        while let Some(Ok(block)) = stream.next().await {
+            if let ContentBlock::Text { text } = block {
+                texts.push(text);
+            }
+        }
+        assert_eq!(texts, vec!["Hello ", "world!"]);
+
+        // Test complete (accumulates)
         let response = provider.complete(request).await.unwrap();
+        assert_eq!(response.content.len(), 2);
+        assert_eq!(response.usage.input_tokens, 5);
+    }
+
+    #[tokio::test]
+    async fn local_provider_full_response_fallback() {
+        let provider = LocalLlmProvider::new(|_req| async {
+            let chunks = vec![Ok(json!({
+                "message": { "role": "assistant", "content": "Full response" },
+                "usage": { "input_tokens": 10, "output_tokens": 5 }
+            }))];
+            Ok(Box::pin(futures::stream::iter(chunks))
+                as Pin<
+                    Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>,
+                >)
+        });
+
+        let request = CompletionRequest {
+            messages: vec![],
+            tools: vec![],
+            max_tokens: 1024,
+            temperature: 0.7,
+            model: Some("test".to_string()),
+            stop_sequences: vec![],
+            extra: None,
+        };
+
+        let response = provider.complete(request).await.unwrap();
+        assert_eq!(response.content.len(), 1);
         assert!(
-            matches!(&response.content[0], ContentBlock::Text { text } if text == "I'm local!")
+            matches!(&response.content[0], ContentBlock::Text { text } if text == "Full response")
         );
     }
 }

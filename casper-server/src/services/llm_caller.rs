@@ -55,7 +55,11 @@ fn create_provider(
 
             Ok(Box::new(LocalLlmProvider::new(move |request_json| {
                 let registry = Arc::clone(&registry);
-                Box::pin(async move { registry.dispatch_json(backend_id, request_json).await })
+                Box::pin(async move {
+                    registry
+                        .dispatch_stream_json(backend_id, request_json)
+                        .await
+                })
             })))
         }
         other => Err(CasperError::Internal(format!(

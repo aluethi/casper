@@ -1,3 +1,4 @@
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -5,8 +6,9 @@ use std::time::{Duration, Instant};
 use casper_base::CasperError;
 use casper_base::RuntimeMetrics;
 use dashmap::DashMap;
+use futures::Stream;
 use serde_json::json;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use casper_wire::WsMessage;
@@ -20,7 +22,7 @@ pub struct AgentBackendConnection {
     pub connected_at: Instant,
     pub active_requests: AtomicU32,
     pub max_concurrent: u32,
-    pub pending_requests: DashMap<String, oneshot::Sender<WsMessage>>,
+    pub pending_requests: DashMap<String, mpsc::Sender<WsMessage>>,
 }
 
 // ── Agent Backend Registry ────────────────────────────────────────
@@ -78,13 +80,16 @@ impl AgentBackendRegistry {
             .unwrap_or(false)
     }
 
-    /// Transport-level dispatch: sends a JSON request to an agent backend
-    /// over WebSocket and returns the JSON response.
-    pub async fn dispatch_json(
+    /// Streaming dispatch: sends a request with `stream: true` and returns
+    /// a stream of JSON chunks as the backend produces them.
+    pub async fn dispatch_stream_json(
         &self,
         backend_id: Uuid,
         request: serde_json::Value,
-    ) -> Result<serde_json::Value, CasperError> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<serde_json::Value, CasperError>> + Send>>,
+        CasperError,
+    > {
         let start = Instant::now();
         let bid_str = backend_id.to_string();
 
@@ -96,7 +101,7 @@ impl AgentBackendRegistry {
             .inc();
 
         let request_id = format!("req-{}", Uuid::now_v7().simple());
-        let (tx, rx) = oneshot::channel::<WsMessage>();
+        let (tx, rx) = mpsc::channel::<WsMessage>(64);
         conn.pending_requests.insert(request_id.clone(), tx);
 
         let timeout_ms = request["timeout_ms"].as_u64().unwrap_or(120_000);
@@ -108,7 +113,7 @@ impl AgentBackendRegistry {
             params: json!({
                 "max_tokens": request["max_tokens"],
                 "temperature": request["temperature"],
-                "stream": false,
+                "stream": true,
             }),
             extra: None,
             timeout_ms,
@@ -133,85 +138,82 @@ impl AgentBackendRegistry {
             ));
         }
 
-        let timeout = Duration::from_millis(timeout_ms);
-        let result = tokio::time::timeout(timeout, rx).await;
+        let metrics = self.metrics.clone();
+        let conn_cleanup = Arc::clone(&conn);
+        let req_id_cleanup = request_id.clone();
 
-        conn.active_requests.fetch_sub(1, Ordering::Relaxed);
-        self.metrics
-            .agent_backend_active_requests
-            .with_label_values(&[&bid_str])
-            .dec();
+        let stream = async_stream::stream! {
+            let mut rx = rx;
+            let timeout = Duration::from_millis(timeout_ms);
+            let deadline = tokio::time::Instant::now() + timeout;
 
-        let elapsed = start.elapsed().as_secs_f64();
-        self.metrics.agent_backend_request_duration.observe(elapsed);
-
-        match result {
-            Ok(Ok(WsMessage::InferenceResponse(resp))) => {
-                let msg = resp.message.unwrap_or(casper_wire::InferenceMessage {
-                    role: "assistant".to_string(),
-                    content: None,
-                    tool_calls: None,
-                });
-                let usage = resp.usage.unwrap_or_default();
-
-                Ok(json!({
-                    "message": {
-                        "role": msg.role,
-                        "content": msg.content,
-                        "tool_calls": msg.tool_calls,
-                    },
-                    "usage": {
-                        "input_tokens": usage.input_tokens,
-                        "output_tokens": usage.output_tokens,
-                    },
-                    "stop_reason": resp.stop_reason,
-                    "model": resp.id,
-                }))
-            }
-            Ok(Ok(WsMessage::InferenceError(err))) => {
-                let error = err.error;
-                let message = err.message;
-                let retryable = err.retryable;
-                self.metrics
-                    .agent_backend_errors
-                    .with_label_values(&[&bid_str, &error])
-                    .inc();
-                let detail = message.unwrap_or(error.clone());
-                if retryable {
-                    Err(CasperError::Unavailable(detail))
-                } else {
-                    Err(CasperError::BadGateway(detail))
+            loop {
+                match tokio::time::timeout_at(deadline, rx.recv()).await {
+                    Ok(Some(WsMessage::InferenceChunk { delta, .. })) => {
+                        yield Ok(json!({ "delta": delta }));
+                    }
+                    Ok(Some(WsMessage::InferenceDone(done))) => {
+                        let usage = done.usage.unwrap_or_default();
+                        yield Ok(json!({
+                            "done": true,
+                            "usage": {
+                                "input_tokens": usage.input_tokens,
+                                "output_tokens": usage.output_tokens,
+                            }
+                        }));
+                        break;
+                    }
+                    Ok(Some(WsMessage::InferenceResponse(resp))) => {
+                        // Non-streaming fallback: backend sent full response
+                        let msg = resp.message.unwrap_or(casper_wire::InferenceMessage {
+                            role: "assistant".to_string(),
+                            content: None,
+                            tool_calls: None,
+                        });
+                        let usage = resp.usage.unwrap_or_default();
+                        yield Ok(json!({
+                            "message": {
+                                "role": msg.role,
+                                "content": msg.content,
+                                "tool_calls": msg.tool_calls,
+                            },
+                            "usage": {
+                                "input_tokens": usage.input_tokens,
+                                "output_tokens": usage.output_tokens,
+                            },
+                            "stop_reason": resp.stop_reason,
+                        }));
+                        break;
+                    }
+                    Ok(Some(WsMessage::InferenceError(err))) => {
+                        let detail = err.message.unwrap_or(err.error);
+                        yield Err(CasperError::BadGateway(detail));
+                        break;
+                    }
+                    Ok(Some(_)) => continue,
+                    Ok(None) => {
+                        yield Err(CasperError::Unavailable("agent backend connection dropped".into()));
+                        break;
+                    }
+                    Err(_) => {
+                        yield Err(CasperError::GatewayTimeout("agent backend request timed out".into()));
+                        break;
+                    }
                 }
             }
-            Ok(Ok(_)) => {
-                self.metrics
-                    .agent_backend_errors
-                    .with_label_values(&[&bid_str, "unexpected_message"])
-                    .inc();
-                Err(CasperError::Internal(
-                    "unexpected message type from agent backend".into(),
-                ))
-            }
-            Ok(Err(_)) => {
-                self.metrics
-                    .agent_backend_errors
-                    .with_label_values(&[&bid_str, "disconnected"])
-                    .inc();
-                Err(CasperError::Unavailable(
-                    "agent backend connection dropped".into(),
-                ))
-            }
-            Err(_) => {
-                conn.pending_requests.remove(&request_id);
-                self.metrics
-                    .agent_backend_errors
-                    .with_label_values(&[&bid_str, "timeout"])
-                    .inc();
-                Err(CasperError::GatewayTimeout(
-                    "agent backend request timed out".into(),
-                ))
-            }
-        }
+
+            // Cleanup
+            conn_cleanup.pending_requests.remove(&req_id_cleanup);
+            conn_cleanup.active_requests.fetch_sub(1, Ordering::Relaxed);
+            metrics
+                .agent_backend_active_requests
+                .with_label_values(&[&bid_str])
+                .dec();
+            let elapsed = start.elapsed().as_secs_f64();
+            metrics.agent_backend_request_duration.observe(elapsed);
+        };
+
+        Ok(Box::pin(stream))
     }
 
     fn pick_connection(

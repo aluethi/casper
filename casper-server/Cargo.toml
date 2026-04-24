@@ -37,6 +37,7 @@ tokio-stream = { workspace = true }
 url = { workspace = true }
 rand = { workspace = true }
 async-trait = { workspace = true }
+async-stream = "0.3"
 
 [dev-dependencies]
 wiremock = { workspace = true }

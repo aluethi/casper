@@ -201,14 +201,27 @@ async fn handle_agent_ws(socket: WebSocket, state: AppState, backend_id: Uuid) {
             Ok(Some(Ok(text))) => match serde_json::from_str::<WsMessage>(&text) {
                 Ok(WsMessage::Pong(_)) => { /* heartbeat OK */ }
                 Ok(msg @ WsMessage::InferenceResponse(_))
-                | Ok(msg @ WsMessage::InferenceError(_)) => {
+                | Ok(msg @ WsMessage::InferenceError(_))
+                | Ok(msg @ WsMessage::InferenceDone(_)) => {
                     let req_id = match &msg {
                         WsMessage::InferenceResponse(r) => r.id.clone(),
                         WsMessage::InferenceError(e) => e.id.clone(),
+                        WsMessage::InferenceDone(d) => d.id.clone(),
                         _ => unreachable!(),
                     };
+                    // Terminal messages — remove the sender after sending
                     if let Some((_, tx)) = conn_recv.pending_requests.remove(&req_id) {
-                        let _ = tx.send(msg);
+                        let _ = tx.send(msg).await;
+                    }
+                }
+                Ok(msg @ WsMessage::InferenceChunk { .. }) => {
+                    let req_id = match &msg {
+                        WsMessage::InferenceChunk { id, .. } => id.clone(),
+                        _ => unreachable!(),
+                    };
+                    // Streaming chunk — keep the sender alive
+                    if let Some(tx) = conn_recv.pending_requests.get(&req_id) {
+                        let _ = tx.send(msg).await;
                     }
                 }
                 Ok(_) => tracing::debug!("ignoring unexpected message type from agent"),
