@@ -317,6 +317,24 @@ fn build_request(request: &CompletionRequest) -> serde_json::Value {
         "temperature": request.temperature,
     });
 
+    if !request.tools.is_empty() {
+        let tools: Vec<serde_json::Value> = request
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }
+                })
+            })
+            .collect();
+        body["tools"] = json!(tools);
+    }
+
     if let Some(serde_json::Value::Object(params)) = &request.extra {
         let body_obj = body.as_object_mut().unwrap();
         for (k, v) in params {

@@ -106,6 +106,12 @@ impl AgentBackendRegistry {
 
         let timeout_ms = request["timeout_ms"].as_u64().unwrap_or(120_000);
 
+        let extra = if request.get("tools").and_then(|t| t.as_array()).is_some() {
+            Some(json!({ "tools": request["tools"] }))
+        } else {
+            None
+        };
+
         let ws_req = WsMessage::InferenceRequest(casper_wire::InferenceRequest {
             id: request_id.clone(),
             model: request["model"].as_str().unwrap_or("").to_string(),
@@ -115,7 +121,7 @@ impl AgentBackendRegistry {
                 "temperature": request["temperature"],
                 "stream": true,
             }),
-            extra: None,
+            extra,
             timeout_ms,
         });
 

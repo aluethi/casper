@@ -266,6 +266,13 @@ async fn dispatch_local(
     if let Some(v) = params.get("temperature").and_then(|v| v.as_f64()) {
         body["temperature"] = serde_json::json!(v);
     }
+    if let Some(tools) = extra
+        .and_then(|e| e.get("tools"))
+        .and_then(|t| t.as_array())
+        && !tools.is_empty()
+    {
+        body["tools"] = serde_json::json!(tools);
+    }
 
     let response = client
         .post(&url)
@@ -332,6 +339,13 @@ async fn dispatch_local_stream(
     }
     if let Some(v) = params.get("temperature").and_then(|v| v.as_f64()) {
         body["temperature"] = serde_json::json!(v);
+    }
+    if let Some(tools) = extra
+        .and_then(|e| e.get("tools"))
+        .and_then(|t| t.as_array())
+        && !tools.is_empty()
+    {
+        body["tools"] = serde_json::json!(tools);
     }
 
     let response = client
